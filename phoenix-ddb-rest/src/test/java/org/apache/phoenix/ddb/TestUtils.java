@@ -494,7 +494,7 @@ public class TestUtils {
             PTable table = phoenixConnection.getTable(
                     new PTableKey(phoenixConnection.getTenantId(), fullTableName));
             Assert.assertFalse(table.isStrictTTL());
-            Assert.assertEquals(1800000, table.getUpdateCacheFrequency());
+            Assert.assertEquals(60000, table.getUpdateCacheFrequency());
             TableDescriptor td = phoenixConnection.getQueryServices()
                     .getTableDescriptor(fullTableName.getBytes());
             Assert.assertEquals(mergeEnabled, td.isMergeEnabled());

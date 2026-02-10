@@ -50,9 +50,9 @@ public class AsyncIndexManager {
             + "AND (TO_NUMBER(CURRENT_TIME()) - LAST_DDL_TIMESTAMP) > %d";
 
     public static void run(Connection connection) throws SQLException {
-        activateIndexesForBuilding(connection, 1800010);
-        dropDisabledIndexes(connection, 1800010);
-        runIndexTool(connection, 1860000);
+        activateIndexesForBuilding(connection, 90010);
+        dropDisabledIndexes(connection, 90010);
+        runIndexTool(connection, 90010);
     }
 
     public static void activateIndexesForBuilding(Connection conn, int minAgeMs) throws SQLException {
