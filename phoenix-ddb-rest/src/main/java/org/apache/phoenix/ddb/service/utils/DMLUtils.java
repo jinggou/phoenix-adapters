@@ -63,14 +63,21 @@ public class DMLUtils {
      * TODO: UPDATED_OLD | UPDATED_NEW
      */
     public static Map<String, Object> executeUpdate(PreparedStatement stmt, String returnValue,
-        String returnValuesOnConditionCheckFailure, boolean hasCondExp, List<PColumn> pkCols,
-        ApiOperation apiOperation) throws SQLException, ConditionCheckFailedException {
+        String returnValuesOnConditionCheckFailure, boolean hasCondExp, boolean canEvaluateUpdateExprOnEmptyDoc,
+                                                    List<PColumn> pkCols, ApiOperation apiOperation)
+                            throws SQLException, ConditionCheckFailedException {
         try {
             Map<String, Object> returnAttrs = new HashMap<>();
             if (!needReturnRow(returnValue, returnValuesOnConditionCheckFailure)) {
                 int returnStatus = stmt.executeUpdate();
-                if (returnStatus == 0 && hasCondExp) {
-                    throw new ConditionCheckFailedException();
+                if (returnStatus == 0) {
+                    if (hasCondExp) {
+                        throw new ConditionCheckFailedException();
+                    }
+                    if (!canEvaluateUpdateExprOnEmptyDoc && apiOperation == ApiOperation.UPDATE_ITEM) {
+                        throw new ValidationException(
+                                "The provided expression references an attribute that does not exist in the item");
+                    }
                 }
                 return new HashMap<>();
             }
@@ -100,6 +107,10 @@ public class DMLUtils {
                         }
                     }
                     throw conditionalCheckFailedException;
+                }
+                if (!canEvaluateUpdateExprOnEmptyDoc && apiOperation == ApiOperation.UPDATE_ITEM) {
+                    throw new ValidationException(
+                            "The provided expression references an attribute that does not exist in the item");
                 }
             } else {
                 boolean returnValuesInResponse = false;

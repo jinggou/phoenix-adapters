@@ -78,7 +78,7 @@ public class DeleteItemService {
         return DMLUtils.executeUpdate(stmtInfo.stmt,
                 (String) request.get(ApiMetadata.RETURN_VALUES),
                 (String) request.get(ApiMetadata.RETURN_VALUES_ON_CONDITION_CHECK_FAILURE),
-                hasCondExp, pkCols, ApiOperation.DELETE_ITEM);
+                hasCondExp, true, pkCols, ApiOperation.DELETE_ITEM);
     }
 
     /**

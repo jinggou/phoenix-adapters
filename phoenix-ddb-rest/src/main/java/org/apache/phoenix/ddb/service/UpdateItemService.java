@@ -7,6 +7,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.phoenix.expression.util.bson.BsonUpdateInvalidArgumentException;
+import org.apache.phoenix.expression.util.bson.UpdateExpressionUtils;
 import org.bson.BsonDocument;
 import org.bson.BsonValue;
 import org.bson.RawBsonDocument;
@@ -89,7 +91,7 @@ public class UpdateItemService {
             Map<String, Object> res = DMLUtils.executeUpdate(statementInfo.stmt,
                     (String) request.get(ApiMetadata.RETURN_VALUES),
                     (String) request.get(ApiMetadata.RETURN_VALUES_ON_CONDITION_CHECK_FAILURE),
-                    hasCondExp, pkCols, ApiOperation.UPDATE_ITEM);
+                    hasCondExp, statementInfo.canEvaluateUpdateExprOnEmptyDoc, pkCols, ApiOperation.UPDATE_ITEM);
             res.put(ApiMetadata.CONSUMED_CAPACITY,
                     CommonServiceUtils.getConsumedCapacity((String)request.get(ApiMetadata.TABLE_NAME)));
             return res;
@@ -136,11 +138,17 @@ public class UpdateItemService {
         }
 
         // Extract $SET and $ADD portion from updateDoc for VALUES() clause
-        BsonDocument newItemDoc = extractSetAndAddDocument(updateDoc, request, pkCols);
+        boolean canEvaluateUpdateExprOnEmptyDoc = true;
+        BsonDocument newItemDoc = new BsonDocument();
+        try {
+            updateNewItemDoc(newItemDoc, updateDoc, request, pkCols);
+        } catch (BsonUpdateInvalidArgumentException e) {
+            canEvaluateUpdateExprOnEmptyDoc = false;
+        }
 
         // Determine query format to use
         QueryFormatInfo formatInfo =
-                determineQueryFormat(condExpr, exprAttrNames, pkCols.size());
+                determineQueryFormat(condExpr, exprAttrNames, pkCols.size(), canEvaluateUpdateExprOnEmptyDoc);
 
         BsonDocument conditionDoc = null;
         if (!StringUtils.isEmpty(condExpr)) {
@@ -150,17 +158,19 @@ public class UpdateItemService {
 
         PreparedStatement stmt =
                 conn.prepareStatement(String.format(formatInfo.queryFormat, PhoenixUtils.getFullTableName(tableName, true)));
-        return new StatementInfo(stmt, conditionDoc, updateDoc, newItemDoc, formatInfo.needsValuesDoc);
+        return new StatementInfo(stmt, conditionDoc, updateDoc, newItemDoc, formatInfo.needsValuesDoc, canEvaluateUpdateExprOnEmptyDoc);
     }
 
     /**
-     * Extract values from the update document to use in VALUES() clause for new row creation.
+     * Extract values from the update document and apply on an empty document to use in VALUES() clause for new row creation.
      * This includes SET operations, ADD operations (for new item creation), and primary keys.
      * For DynamoDB compatibility, ADD operations should contribute to initial values when creating new items.
      */
-    private static BsonDocument extractSetAndAddDocument(BsonDocument updateDoc,
-            Map<String, Object> request, List<PColumn> pkCols) {
-        BsonDocument newItemDoc = new BsonDocument();
+    private static void updateNewItemDoc(BsonDocument newItemDoc,
+                                         BsonDocument updateDoc,
+                                         Map<String, Object> request,
+                                         List<PColumn> pkCols) {
+        BsonDocument newUpdateDoc = new BsonDocument();
 
         // Add primary key values to the set document
         addKeysToNewItemDoc(newItemDoc, request, pkCols);
@@ -169,21 +179,20 @@ public class UpdateItemService {
             // Add SET operations - these always contribute to new item creation
             if (updateDoc.containsKey("$SET")) {
                 BsonDocument setBsonDoc = updateDoc.getDocument("$SET");
-                newItemDoc.putAll(setBsonDoc);
+                newUpdateDoc.put("$SET", setBsonDoc);
             }
 
             // Add ADD operations - for new item creation, these become initial values
             // DynamoDB semantics: ADD on non-existing item creates item with ADD value
             if (updateDoc.containsKey("$ADD")) {
                 BsonDocument addBsonDoc = updateDoc.getDocument("$ADD");
-                newItemDoc.putAll(addBsonDoc);
+                newUpdateDoc.put("$ADD", addBsonDoc);
             }
 
             // Note: REMOVE and DELETE operations don't contribute to new item creation
             // They are no-ops on non-existing items, handled by the update expression
         }
-
-        return newItemDoc;
+        UpdateExpressionUtils.updateExpression(newUpdateDoc, newItemDoc);
     }
 
     /**
@@ -232,7 +241,7 @@ public class UpdateItemService {
      * Determine the appropriate query format based on conditions and operations.
      */
     private static QueryFormatInfo determineQueryFormat(String condExpr,
-            Map<String, String> exprAttrNames, int pkColsSize) {
+            Map<String, String> exprAttrNames, int pkColsSize, boolean canEvaluateUpdateExprOnEmptyDoc) {
 
         boolean hasCondition = !StringUtils.isEmpty(condExpr);
         boolean canCreateNewItemWithCondition = false;
@@ -242,7 +251,7 @@ public class UpdateItemService {
             canCreateNewItemWithCondition = evaluateConditionOnNonExistingItem(condExpr, exprAttrNames);
         }
 
-        if (canCreateNewItemWithCondition) {
+        if (canCreateNewItemWithCondition && canEvaluateUpdateExprOnEmptyDoc) {
             // Can create new item and have values to insert (set/add or even just keys)
             String format = pkColsSize == 1 ?
                             CONDITIONAL_UPDATE_WITH_HASH_KEY :
@@ -257,10 +266,17 @@ public class UpdateItemService {
                 return new QueryFormatInfo(format, false); // UPDATE_ONLY doesn't use VALUES document
             } else {
                 // there was no condition to begin with, still allow creation
-                String format = (pkColsSize == 1) ?
-                        UPDATE_WITH_HASH_KEY :
-                        UPDATE_WITH_HASH_SORT_KEY;
-                return new QueryFormatInfo(format, true);
+                if (canEvaluateUpdateExprOnEmptyDoc) {
+                    String format = (pkColsSize == 1) ?
+                            UPDATE_WITH_HASH_KEY :
+                            UPDATE_WITH_HASH_SORT_KEY;
+                    return new QueryFormatInfo(format, true);
+                } else {
+                    String format = (pkColsSize == 1) ?
+                            UPDATE_ONLY_WITH_HASH_KEY :
+                            UPDATE_ONLY_WITH_HASH_SORT_KEY;
+                    return new QueryFormatInfo(format, false);
+                }
             }
         }
     }
@@ -317,14 +333,17 @@ public class UpdateItemService {
         final BsonDocument updateDoc;
         final BsonDocument newItemDoc;
         final boolean needsValuesDoc;
+        final boolean canEvaluateUpdateExprOnEmptyDoc;
 
         public StatementInfo(PreparedStatement stmt, BsonDocument conditionDoc,
-                BsonDocument updateDoc, BsonDocument newItemDoc, boolean needsValuesDoc) {
+                BsonDocument updateDoc, BsonDocument newItemDoc, boolean needsValuesDoc,
+                             boolean canEvaluateUpdateExprOnEmptyDoc) {
             this.stmt = stmt;
             this.conditionDoc = conditionDoc;
             this.updateDoc = updateDoc;
             this.newItemDoc = newItemDoc;
             this.needsValuesDoc = needsValuesDoc;
+            this.canEvaluateUpdateExprOnEmptyDoc = canEvaluateUpdateExprOnEmptyDoc;
         }
     }
 }

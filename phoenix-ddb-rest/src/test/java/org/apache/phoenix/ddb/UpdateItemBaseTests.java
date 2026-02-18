@@ -63,6 +63,7 @@ import org.apache.phoenix.util.ServerUtil;
 
 import static org.apache.phoenix.query.BaseTest.setUpConfigForMiniCluster;
 import static software.amazon.awssdk.services.dynamodb.model.ReturnValue.ALL_NEW;
+import static software.amazon.awssdk.services.dynamodb.model.ReturnValue.ALL_OLD;
 
 /**
  * Tests for UpdateItem API without conditional updates.
@@ -403,6 +404,175 @@ public class UpdateItemBaseTests {
         validateItem(tableName, key);
     }
 
+    @Test(timeout = 120000)
+    public void testCounterIncrement1() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, false);
+
+        // update item
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+                "SET #counter = if_not_exists(#counter, :start) + :increment");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#counter", "Counter");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":start", AttributeValue.builder().n("1").build());
+        exprAttrVal.put(":increment", AttributeValue.builder().n("1").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        Assert.assertEquals(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    @Test(timeout = 120000)
+    public void testCounterIncrement2() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, true);
+
+        // update item
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+                "SET #counter = if_not_exists(#counter, :start) + :increment");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#counter", "Counter");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":start", AttributeValue.builder().n("1").build());
+        exprAttrVal.put(":increment", AttributeValue.builder().n("1").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        Assert.assertEquals(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    @Test(timeout = 120000)
+    public void testCounterIncrement3() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, false);
+
+        // update item
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+                "SET #counter = if_not_exists(#counter, :start) + :increment");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#counter", "Counter");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":start", AttributeValue.builder().n("1").build());
+        exprAttrVal.put(":increment", AttributeValue.builder().n("1").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_OLD);
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        Assert.assertEquals(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    @Test(timeout = 120000)
+    public void testCounterIncrement4() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, true);
+
+        // update item
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+                "SET #counter = if_not_exists(#counter, :start) + :increment");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#counter", "Counter");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":start", AttributeValue.builder().n("1").build());
+        exprAttrVal.put(":increment", AttributeValue.builder().n("1").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_OLD);
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        Assert.assertEquals(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    @Test(timeout = 120000)
+    public void testDeleteRemoveSetAddNonExistentItemSuccess() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, false);
+
+        // update item
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+                "DELETE #1 :v1 REMOVE #2 ADD #3 :v3 SET #5 = if_not_exists(#5, :v5) + :v51, #4 = :v4");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#1", "TopLevelSet");
+        exprAttrNames.put("#2", "Reviews");
+        exprAttrNames.put("#3", "COL1");
+        exprAttrNames.put("#4", "COL3");
+        exprAttrNames.put("#5", "NEWCOL");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":v1", AttributeValue.builder().ss("setMember2").build());
+        exprAttrVal.put(":v3", AttributeValue.builder().n("1000000").build());
+        exprAttrVal.put(":v4", AttributeValue.builder().s("dEsCrIpTiOn1").build());
+        exprAttrVal.put(":v5", AttributeValue.builder().n("1").build());
+        exprAttrVal.put(":v51", AttributeValue.builder().n("10").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        Assert.assertEquals(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    @Test(timeout = 120000)
+    public void testDeleteRemoveSetAddNonExistentItemFail() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, false);
+
+        // update item
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+                "DELETE #1 :v1 REMOVE #2 ADD #3 :v3 SET #5 = #5 + :v5, #4 = :v4");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#1", "TopLevelSet");
+        exprAttrNames.put("#2", "Reviews");
+        exprAttrNames.put("#3", "COL1");
+        exprAttrNames.put("#4", "COL3");
+        exprAttrNames.put("#5", "NEWCOL");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":v1", AttributeValue.builder().ss("setMember2").build());
+        exprAttrVal.put(":v3", AttributeValue.builder().n("1000000").build());
+        exprAttrVal.put(":v4", AttributeValue.builder().s("dEsCrIpTiOn1").build());
+        exprAttrVal.put(":v5", AttributeValue.builder().n("1").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+        try {
+            UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+        }
+        try {
+            UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+        }
+        validateItem(tableName, key);
+    }
+
     protected void createTableAndPutItem(String tableName, boolean putItem) {
         //create table
         CreateTableRequest createTableRequest;
@@ -445,6 +615,7 @@ public class UpdateItemBaseTests {
         item.put("COL4", AttributeValue.builder().n("34").build());
         item.put("COL5", AttributeValue.builder().n("67").build());
         item.put("TopLevelSet", AttributeValue.builder().ss("setMember1").build());
+        item.put("Counter", AttributeValue.builder().n("66").build());
         Map<String, AttributeValue> reviewMap1 = new HashMap<>();
         reviewMap1.put("reviewer", AttributeValue.builder().s("Alice").build());
         Map<String, AttributeValue> fiveStarMap = new HashMap<>();

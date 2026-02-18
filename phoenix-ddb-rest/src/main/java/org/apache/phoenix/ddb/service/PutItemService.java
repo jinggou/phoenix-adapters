@@ -89,7 +89,7 @@ public class PutItemService {
         return DMLUtils.executeUpdate(stmtInfo.stmt,
                 (String) request.get(ApiMetadata.RETURN_VALUES),
                 (String) request.get(ApiMetadata.RETURN_VALUES_ON_CONDITION_CHECK_FAILURE),
-                hasCondExp, pkCols, ApiOperation.PUT_ITEM);
+                hasCondExp, true, pkCols, ApiOperation.PUT_ITEM);
     }
 
     private static StatementInfo getPreparedStatement(Connection conn, Map<String, Object> request,
