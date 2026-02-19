@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
 import java.sql.Connection;
+import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -139,7 +140,7 @@ public class GetRecordsService {
         }
         PreparedStatement ps = conn.prepareStatement(sb.toString());
         ps.setString(1, phoenixShardIterator.getPartitionId());
-        ps.setTimestamp(2, new Timestamp(phoenixShardIterator.getTimestamp()));
+        ps.setDate(2, new Date(phoenixShardIterator.getTimestamp()));
         ps.setInt(3, limit);
         if (phoenixShardIterator.getOffset() > 0) {
             ps.setInt(4, phoenixShardIterator.getOffset());
