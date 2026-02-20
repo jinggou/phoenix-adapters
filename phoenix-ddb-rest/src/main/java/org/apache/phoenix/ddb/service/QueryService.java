@@ -127,7 +127,6 @@ public class QueryService {
         } catch (RuntimeException e) {
             throw new ValidationException(e.getMessage());
         }
-        PColumn sortKeyPKCol = keyConditions.getSortKeyPKCol();
 
         // append all conditions for WHERE clause
         // TODO: Validate exclusiveStartKey against sortKey range in key condition expression
@@ -135,7 +134,7 @@ public class QueryService {
         boolean scanIndexForward = doScanIndexForward(request);
         DQLUtils.addExclusiveStartKeyConditionForQuery(queryBuilder,
                 (Map<String, Object>) request.get(ApiMetadata.EXCLUSIVE_START_KEY), useIndex,
-                sortKeyPKCol, scanIndexForward);
+                scanIndexForward, tablePKCols, indexPKCols);
         DQLUtils.addFilterCondition(true, queryBuilder, (String) request.get(ApiMetadata.FILTER_EXPRESSION),
                 exprAttrNames, exprAttrValues);
         addOrderByClause(queryBuilder, useIndex, tablePKCols, indexPKCols, scanIndexForward);
@@ -144,8 +143,8 @@ public class QueryService {
 
         // Set values on the PreparedStatement
         PreparedStatement stmt = conn.prepareStatement(queryBuilder.toString());
-        setPreparedStatementValues(stmt, request, keyConditions, useIndex, sortKeyPKCol);
-        return Pair.newPair(stmt, sortKeyPKCol == null);
+        setPreparedStatementValues(stmt, request, keyConditions, useIndex, tablePKCols, indexPKCols);
+        return Pair.newPair(stmt, !useIndex && tablePKCols.size() == 1);
     }
 
     private static void addOrderByClause(StringBuilder queryBuilder, boolean useIndex,
@@ -162,6 +161,13 @@ public class QueryService {
             queryBuilder.append(", ").append(sortKeyName)
                     .append(scanIndexForward ? " ASC " : " DESC ");
         }
+        if (useIndex) {
+            for (PColumn tablePkCol : tablePKCols) {
+                String pkName = CommonServiceUtils.getEscapedArgument(tablePkCol.getName().toString());
+                queryBuilder.append(", ").append(pkName).append(scanIndexForward ? " ASC " : " DESC ");
+            }
+        }
+        queryBuilder.append(" ");
     }
 
     /**
@@ -172,15 +178,19 @@ public class QueryService {
      */
     private static void setPreparedStatementValues(PreparedStatement stmt,
             Map<String, Object> request, KeyConditionsHolder keyConditions, boolean useIndex,
-            PColumn sortKeyPKCol) throws SQLException {
+            List<PColumn> tablePKCols, List<PColumn> indexPKCols) throws SQLException {
         int index = 1;
         Map<String, Object> exclusiveStartKey =
                 (Map<String, Object>) request.get(ApiMetadata.EXCLUSIVE_START_KEY);
         Map<String, Object> exprAttrVals =
                 (Map<String, Object>) request.get(ApiMetadata.EXPRESSION_ATTRIBUTE_VALUES);
+
+        // Bind partition key value
         Map<String, Object> partitionAttrVal =
                 (Map<String, Object>) exprAttrVals.get(keyConditions.getPartitionValue());
         DQLUtils.setKeyValueOnStatement(stmt, index++, partitionAttrVal, false);
+
+        // Bind sort key values from key condition expression
         if (keyConditions.hasSortKey()) {
             if (keyConditions.hasBeginsWith()) {
                 Map<String, Object> sortAttrVal = (Map<String, Object>) exprAttrVals.get(
@@ -198,10 +208,28 @@ public class QueryService {
                 }
             }
         }
-        if (exclusiveStartKey != null && !exclusiveStartKey.isEmpty() && sortKeyPKCol != null) {
-            String sortKeyName = CommonServiceUtils.getColumnNameFromPCol(sortKeyPKCol, useIndex);
-            DQLUtils.setKeyValueOnStatement(stmt, index,
-                    (Map<String, Object>) exclusiveStartKey.get(sortKeyName), false);
+        // Bind exclusive start key values for pagination
+        if (exclusiveStartKey != null && !exclusiveStartKey.isEmpty()) {
+            if (useIndex) {
+                // Index query: bind values matching RVC order (isk if present, then table PKs)
+                if (indexPKCols.size() > 1) {
+                    String iskName = CommonServiceUtils.getKeyNameFromBsonValueFunc(indexPKCols.get(1).getName().toString());
+                    DQLUtils.setKeyValueOnStatement(stmt, index++,
+                            (Map<String, Object>) exclusiveStartKey.get(iskName), false);
+                }
+                for (PColumn tablePkCol : tablePKCols) {
+                    String pkName = tablePkCol.getName().getString();
+                    DQLUtils.setKeyValueOnStatement(stmt, index++,
+                            (Map<String, Object>) exclusiveStartKey.get(pkName), false);
+                }
+            } else {
+                // Table query: only bind sort key if table has one
+                if (tablePKCols.size() > 1) {
+                    String skName = tablePKCols.get(1).getName().getString();
+                    DQLUtils.setKeyValueOnStatement(stmt, index++,
+                            (Map<String, Object>) exclusiveStartKey.get(skName), false);
+                }
+            }
         }
     }
 

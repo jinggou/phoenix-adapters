@@ -29,6 +29,10 @@ import java.util.Properties;
 public class DQLUtils {
 
     public static final String SIZE_LIMIT_REACHED = "SizeLimitReached";
+    private static final String ISK_HK_RVC = "(%s, %s) %s (?, ?)";
+    private static final String ISK_HK_SK_RVC = "(%s, %s, %s) %s (?, ?, ?)";
+    private static final String HK_SK_RVC = "(%s, %s) %s (?, ?)";
+    private static final String HK_RVC = "(%s) %s (?)";
 
     /**
      * Execute the given PreparedStatement, collect all returned items with projected attributes
@@ -134,28 +138,29 @@ public class DQLUtils {
     }
 
     /**
-     * If table has a sortKey and the QueryRequest provides an ExclusiveStartKey,
-     * add the condition for the sortKey to the query. If the request provides an index,
-     * replace sortKey name with a BSON_VALUE expression.
-     * Return the sortKeyName here in case the QueryRequest's KeyConditionExpression
-     * did not have a condition on the sortKey.
+     * If table has a sortKey in its KeyConditionExpression and the QueryRequest provides an ExclusiveStartKey,
+     * add the condition for the sortKey to the query.
+     * If the request provides an index, replace sortKey name with a BSON_VALUE expression.
+     * For index, we also need to provide RVC condition for data table PKs.
      */
     public static void addExclusiveStartKeyConditionForQuery(StringBuilder queryBuilder,
             Map<String, Object> exclusiveStartKey, boolean useIndex,
-            PColumn sortKeyPKCol, boolean scanIndexForward) {
+            boolean scanIndexForward, List<PColumn> tablePKCols, List<PColumn> indexPKCols) {
         if (exclusiveStartKey != null && !exclusiveStartKey.isEmpty()) {
                 String op = " > ";
                 // when scanning backwards, flip the operator
                 if (!scanIndexForward) {
                     op = " < ";
                 }
-                if (sortKeyPKCol != null) {
-                    //append sortKey condition if there is a sortKey
-                    String name = sortKeyPKCol.getName().toString();
-                    name = (useIndex) ?
-                            name.substring(1) :
-                            CommonServiceUtils.getEscapedArgument(name);
-                    queryBuilder.append(" AND " + name + op + " ? ");
+                if (useIndex) {
+                    String rvcClause = getRVCClauseForIndexQuery(op, tablePKCols, indexPKCols);
+                    queryBuilder.append(" AND ").append(rvcClause);
+                } else {
+                    if (tablePKCols.size() == 2) {
+                        String name = tablePKCols.get(1).getName().toString();
+                        name = CommonServiceUtils.getEscapedArgument(name);
+                        queryBuilder.append(" AND " + name + op + " ? ");
+                    }
                 }
         }
     }
@@ -205,6 +210,33 @@ public class DQLUtils {
                 stmt.setBytes(index, val);
             }
 
+        }
+    }
+
+    private static String getRVCClauseForIndexQuery(String op, List<PColumn> tablePKCols,
+                                                    List<PColumn> indexPKCols) {
+        String hk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(0).getName().toString());
+        if (indexPKCols.size() == 1) {
+            // Index has only ihk
+            if (tablePKCols.size() == 1) {
+                // (hk) > (?)
+                return String.format(HK_RVC, hk, op);
+            } else {
+                // (hk, sk) > (?, ?)
+                String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
+                return String.format(HK_SK_RVC, hk, sk, op);
+            }
+        } else {
+            // Index has ihk, isk
+            String isk = CommonServiceUtils.getColumnExprFromPCol(indexPKCols.get(1), true);
+            if (tablePKCols.size() == 1) {
+                // (isk, hk) > (?, ?)
+                return String.format(ISK_HK_RVC, isk, hk, op);
+            } else {
+                // (isk, hk, sk) > (?, ?, ?)
+                String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
+                return String.format(ISK_HK_SK_RVC, isk, hk, sk, op);
+            }
         }
     }
 }

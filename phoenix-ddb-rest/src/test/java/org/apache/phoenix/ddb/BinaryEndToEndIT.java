@@ -767,6 +767,65 @@ public class BinaryEndToEndIT {
     }
 
     @Test
+    public void queryIndexWithEqualsSortKeyAndPagination() {
+        // Common GSI key values (like Phoenix test: GSI_HK and GSI_SK are the same for all rows)
+        byte[] gsiHk = new byte[]{0x00, 0x00, 0x00, 0x0A};  // GSI hash key
+        byte[] gsiSk = "1".getBytes();                       // GSI sort key = "1"
+
+        // Row 1: HK=[0x0B,0x01], SK="1" - ExclusiveStartKey row, should be EXCLUDED
+        byte[] hk1 = new byte[]{0x0B, 0x01};
+        byte[] sk1 = "1".getBytes();
+        Map<String, AttributeValue> item1 = new HashMap<>();
+        item1.put("hk", AttributeValue.builder().b(SdkBytes.fromByteArray(hk1)).build());
+        item1.put("sk", AttributeValue.builder().b(SdkBytes.fromByteArray(sk1)).build());
+        item1.put("index_hk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiHk)).build());
+        item1.put("index_sk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiSk)).build());
+        item1.put("data", AttributeValue.builder().s("row1").build());
+
+        // Row 2: HK=[0x0B,0x01], SK="2" - should be INCLUDED (SK "2" > "1")
+        byte[] hk2 = new byte[]{0x0B, 0x01};
+        byte[] sk2 = "2".getBytes();
+        Map<String, AttributeValue> item2 = new HashMap<>();
+        item2.put("hk", AttributeValue.builder().b(SdkBytes.fromByteArray(hk2)).build());
+        item2.put("sk", AttributeValue.builder().b(SdkBytes.fromByteArray(sk2)).build());
+        item2.put("index_hk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiHk)).build());
+        item2.put("index_sk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiSk)).build());
+        item2.put("data", AttributeValue.builder().s("row2").build());
+
+        // Row 3: HK=[0x0B,0x02], SK="1" - should be INCLUDED (HK [0x0B,0x02] > [0x0B,0x01])
+        byte[] hk3 = new byte[]{0x0B, 0x02};
+        byte[] sk3 = "1".getBytes();
+        Map<String, AttributeValue> item3 = new HashMap<>();
+        item3.put("hk", AttributeValue.builder().b(SdkBytes.fromByteArray(hk3)).build());
+        item3.put("sk", AttributeValue.builder().b(SdkBytes.fromByteArray(sk3)).build());
+        item3.put("index_hk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiHk)).build());
+        item3.put("index_sk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiSk)).build());
+        item3.put("data", AttributeValue.builder().s("row3").build());
+
+        // Insert all rows
+        dynamoDbClient.putItem(PutItemRequest.builder().tableName(TABLE_NAME).item(item1).build());
+        phoenixDBClientV2.putItem(PutItemRequest.builder().tableName(TABLE_NAME).item(item1).build());
+        dynamoDbClient.putItem(PutItemRequest.builder().tableName(TABLE_NAME).item(item2).build());
+        phoenixDBClientV2.putItem(PutItemRequest.builder().tableName(TABLE_NAME).item(item2).build());
+        dynamoDbClient.putItem(PutItemRequest.builder().tableName(TABLE_NAME).item(item3).build());
+        phoenixDBClientV2.putItem(PutItemRequest.builder().tableName(TABLE_NAME).item(item3).build());
+
+        // Query GSI with index_hk = gsiHk AND index_sk = gsiSk (EQUALS on sort key)
+        Map<String, AttributeValue> exprVals = new HashMap<>();
+        exprVals.put(":indexHk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiHk)).build());
+        exprVals.put(":indexSk", AttributeValue.builder().b(SdkBytes.fromByteArray(gsiSk)).build());
+
+        QueryRequest.Builder qr = QueryRequest.builder()
+                .tableName(TABLE_NAME)
+                .indexName(INDEX_NAME)
+                .keyConditionExpression("index_hk = :indexHk AND index_sk = :indexSk")
+                .limit(1)
+                .expressionAttributeValues(exprVals);
+
+        TestUtils.compareQueryOutputs(qr, phoenixDBClientV2, dynamoDbClient);
+    }
+
+    @Test
     public void scanTableWithFilterProjectionAndPagination() {
         List<Map<String, AttributeValue>> items = new ArrayList<>();
         for (int i = 0; i < 100; i++) {
