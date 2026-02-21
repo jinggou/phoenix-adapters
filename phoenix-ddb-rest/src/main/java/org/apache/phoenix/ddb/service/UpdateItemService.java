@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.phoenix.ddb.service.exceptions.ValidationException;
 import org.apache.phoenix.expression.util.bson.BsonUpdateInvalidArgumentException;
 import org.apache.phoenix.expression.util.bson.UpdateExpressionUtils;
 import org.bson.BsonDocument;
@@ -130,8 +131,13 @@ public class UpdateItemService {
                 (Map<String, Object>) request.get(ApiMetadata.ATTRIBUTE_UPDATES);
         BsonDocument updateDoc;
         if (updateExpression != null) {
-            updateDoc = CommonServiceUtils.getBsonUpdateExpressionFromMap(updateExpression,
-                    exprAttrNames, exprAttrVals);
+            try {
+                updateDoc = CommonServiceUtils.getBsonUpdateExpressionFromMap(updateExpression,
+                        exprAttrNames, exprAttrVals);
+            } catch (IllegalArgumentException e) {
+                throw new ValidationException(e.getMessage());
+            }
+
         } else {
             updateDoc = CommonServiceUtils.getBsonUpdateExpressionFromAttributeUpdates(
                     attributeUpdates);

@@ -38,6 +38,8 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Common utilities to be used by phoenixDBClientV2 APIs.
@@ -46,6 +48,7 @@ public class CommonServiceUtils {
 
     public static final String DOUBLE_QUOTE = "\"";
     public static final String HASH = "#";
+    private static final Pattern EXPR_ATTR_NAME_PATTERN = Pattern.compile("#([a-zA-Z0-9_]+)");
 
     public static boolean isCauseMessageAvailable(Exception e) {
         return e.getCause() != null && e.getCause().getMessage() != null;
@@ -158,16 +161,28 @@ public class CommonServiceUtils {
 
     /**
      * Replace all occurrences of aliases in the given String using expression attribute map.
+     * @throws IllegalArgumentException if a placeholder is found that is not in the map,
+     *         or if the expression contains placeholders but the map is null/empty
      */
     public static String replaceExpressionAttributeNames(String s,
-            Map<String, String> exprAttrNames) {
-        if (exprAttrNames == null || !s.contains(HASH)) {
-            return s;
+                                                         Map<String, String> exprAttrNames) {
+        Matcher m = EXPR_ATTR_NAME_PATTERN.matcher(s);
+        StringBuffer result = new StringBuffer();
+        while (m.find()) {
+            String key = m.group(0);
+            if (exprAttrNames == null || exprAttrNames.isEmpty()) {
+                throw new IllegalArgumentException(
+                    "Expression contains placeholder " + key + " but ExpressionAttributeNames is not provided");
+            }
+            String replacement = exprAttrNames.get(key);
+            if (replacement == null) {
+                throw new IllegalArgumentException(
+                    "Expression attribute name " + key + " not found in ExpressionAttributeNames");
+            }
+            m.appendReplacement(result, Matcher.quoteReplacement(replacement));
         }
-        for (String k : exprAttrNames.keySet()) {
-            s = StringUtils.replace(s, k, exprAttrNames.get(k));
-        }
-        return s;
+        m.appendTail(result);
+        return result.toString();
     }
 
     public static Map<String, Object> getConsumedCapacity(final String tableName) {

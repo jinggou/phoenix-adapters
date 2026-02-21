@@ -602,7 +602,7 @@ public class UpdateItemBaseTests {
         GetItemRequest gir = GetItemRequest.builder().tableName(tableName).key(key).build();
         GetItemResponse phoenixResult = phoenixDBClientV2.getItem(gir);
         GetItemResponse dynamoResult = dynamoDbClient.getItem(gir);
-        Assert.assertEquals(dynamoResult.item(), phoenixResult.item());
+        ItemComparator.areItemsEqual(dynamoResult.item(), phoenixResult.item());
     }
 
     protected Map<String, AttributeValue> getItem1() {
@@ -1714,5 +1714,81 @@ public class UpdateItemBaseTests {
         if (isSortKeyPresent)
             key.put("PK2", AttributeValue.builder().n("1").build());
         return key;
+    }
+
+    @Test(timeout = 120000)
+    public void testSetAddRemoveWithOverlappingPlaceholders1() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, true);
+
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+            "SET #my_col = :1, #my_col1 = :2, #my_col10 = :3, #c = #c + :4, #c_1 = :5 " +
+            "ADD #top_set :6 " +
+            "REMOVE #rm_attr, #rm_attr1");
+
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#my_col", "COL2");
+        exprAttrNames.put("#my_col1", "COL3");
+        exprAttrNames.put("#my_col10", "NewField10");
+        exprAttrNames.put("#c", "COL1");
+        exprAttrNames.put("#c_1", "COL4");
+        exprAttrNames.put("#top_set", "TopLevelSet");
+        exprAttrNames.put("#rm_attr", "Counter");
+        exprAttrNames.put("#rm_attr1", "Reviews");
+        uir.expressionAttributeNames(exprAttrNames);
+
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":1", AttributeValue.builder().s("UpdatedTitle").build());
+        exprAttrVal.put(":2", AttributeValue.builder().s("UpdatedDesc").build());
+        exprAttrVal.put(":3", AttributeValue.builder().n("999").build());
+        exprAttrVal.put(":4", AttributeValue.builder().n("5").build());
+        exprAttrVal.put(":5", AttributeValue.builder().n("100").build());
+        exprAttrVal.put(":6", AttributeValue.builder().ss("newMember").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        ItemComparator.areItemsEqual(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    @Test(timeout = 120000)
+    public void testSetAddRemoveWithOverlappingPlaceholders2() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, true);
+
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression(
+            "SET #1 = #1 + :1, #11 = if_not_exists(#11, :11), #111 = :111 " +
+            "ADD #3 :3 " +
+            "REMOVE #4, #5");
+
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#1", "COL1");
+        exprAttrNames.put("#11", "NewCol11");
+        exprAttrNames.put("#111", "NewCol111");
+        exprAttrNames.put("#3", "TopLevelSet");
+        exprAttrNames.put("#4", "COL3");
+        exprAttrNames.put("#5", "Reviews");
+        uir.expressionAttributeNames(exprAttrNames);
+
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":1", AttributeValue.builder().n("10").build());
+        exprAttrVal.put(":11", AttributeValue.builder().s("default11").build());
+        exprAttrVal.put(":111", AttributeValue.builder().s("value111").build());
+        exprAttrVal.put(":3", AttributeValue.builder().ss("addedMember").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        ItemComparator.areItemsEqual(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
     }
 }

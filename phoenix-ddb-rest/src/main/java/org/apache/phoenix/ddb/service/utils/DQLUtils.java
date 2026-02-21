@@ -131,7 +131,11 @@ public class DQLUtils {
             return null;
         }
         List<String> projectionList = new ArrayList<>();
-        projExpr = CommonServiceUtils.replaceExpressionAttributeNames(projExpr, exprAttrNames);
+        try {
+            projExpr = CommonServiceUtils.replaceExpressionAttributeNames(projExpr, exprAttrNames);
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException(e.getMessage());
+        }
         String[] projectionArray = projExpr.split("\\s*,\\s*");
         projectionList.addAll(Arrays.asList(projectionArray));
         return projectionList;
