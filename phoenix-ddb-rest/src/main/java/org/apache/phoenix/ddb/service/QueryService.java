@@ -77,7 +77,7 @@ public class QueryService {
             boolean countOnly = ApiMetadata.SELECT_COUNT.equals(request.get(ApiMetadata.SELECT));
             return DQLUtils.executeStatementReturnResult(stmt,
                     getProjectionAttributes(request), useIndex, tablePKCols, indexPKCols, tableName,
-                    isSingleRowExpected, false, countOnly);
+                    isSingleRowExpected, countOnly);
         } catch (SQLException e) {
             throw new PhoenixServiceException(e);
         }

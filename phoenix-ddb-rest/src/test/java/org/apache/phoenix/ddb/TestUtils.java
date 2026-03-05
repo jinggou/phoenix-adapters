@@ -178,17 +178,10 @@ public class TestUtils {
         int effectiveLimit = 100;
         boolean countOnly = ApiMetadata.SELECT_COUNT.equals(request.get(ApiMetadata.SELECT));
 
-        ScanConfig config = new ScanConfig(
-                ScanService.determineScanType(exclusiveStartKey, useIndex, tablePKCols, indexPKCols),
+        ScanConfig config = new ScanConfig(ScanService.determineScanType(exclusiveStartKey),
                 useIndex, tablePKCols, indexPKCols, effectiveLimit, tableName, indexName, countOnly
         );
-
-        // For two-query scenarios, return the first query's PreparedStatement
-        if (config.getType() == ScanConfig.ScanType.TWO_KEY_FIRST_QUERY) {
-            return ScanService.buildQuery(connection, request, config);
-        } else {
-            return ScanService.buildQuery(connection, request, config);
-        }
+        return ScanService.buildQuery(connection, request, config);
     }
 
     /**

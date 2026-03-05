@@ -31,18 +31,14 @@ public class ScanConfig {
      * Enumeration of different scan types
      */
     public enum ScanType {
-        NO_EXCLUSIVE_START_KEY,           // Simple scan without pagination
-        SINGLE_KEY_CONTINUATION,          // pk > value (single key table)
-        TWO_KEY_FIRST_QUERY,             // pk1 = value AND pk2 > value (two key table, first query)
-        TWO_KEY_SECOND_QUERY             // pk1 > value (two key table, second query)
+        NO_EXCLUSIVE_START_KEY,    // first page
+        WITH_EXCLUSIVE_START_KEY   // subsequent page — apply RVC
     }
 
     private final ScanType type;
     private final boolean useIndex;
     private final List<PColumn> tablePKCols;
     private final List<PColumn> indexPKCols;
-    private final PColumn partitionKeyCol;
-    private final PColumn sortKeyCol;
     private final int limit;
     private final String tableName;
     private final String indexName;
@@ -61,22 +57,6 @@ public class ScanConfig {
         this.tableName = tableName;
         this.indexName = indexName;
         this.countOnly = countOnly;
-
-        List<PColumn> relevantPKCols = useIndex ? indexPKCols : tablePKCols;
-        this.partitionKeyCol = relevantPKCols.get(0);
-        this.sortKeyCol = (relevantPKCols.size() > 1) ? relevantPKCols.get(1) : null;
-    }
-
-    /**
-     * Creates a new ScanConfig with a different type and limit, keeping other properties
-     */
-    public ScanConfig cloneWithTypeAndLimit(ScanType newType, int newLimit) {
-        ScanConfig newConfig = new ScanConfig(newType, this.useIndex, this.tablePKCols,
-                this.indexPKCols, newLimit, this.tableName, this.indexName, this.countOnly);
-        if (this.isSegmentScan) {
-            newConfig.setScanSegmentInfo(this.scanSegmentInfo);
-        }
-        return newConfig;
     }
 
     public void setScanSegmentInfo(ScanSegmentInfo segmentInfo) {
@@ -102,14 +82,6 @@ public class ScanConfig {
 
     public List<PColumn> getIndexPKCols() {
         return indexPKCols;
-    }
-
-    public PColumn getPartitionKeyCol() {
-        return partitionKeyCol;
-    }
-
-    public PColumn getSortKeyCol() {
-        return sortKeyCol;
     }
 
     public int getLimit() {

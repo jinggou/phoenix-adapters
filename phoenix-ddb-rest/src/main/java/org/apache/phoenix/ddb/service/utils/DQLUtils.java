@@ -29,10 +29,10 @@ import java.util.Properties;
 public class DQLUtils {
 
     public static final String SIZE_LIMIT_REACHED = "SizeLimitReached";
-    private static final String ISK_HK_RVC = "(%s, %s) %s (?, ?)";
-    private static final String ISK_HK_SK_RVC = "(%s, %s, %s) %s (?, ?, ?)";
-    private static final String HK_SK_RVC = "(%s, %s) %s (?, ?)";
-    private static final String HK_RVC = "(%s) %s (?)";
+    private static final String RVC_1 = "(%s) %s (?)";
+    private static final String RVC_2 = "(%s, %s) %s (?, ?)";
+    private static final String RVC_3 = "(%s, %s, %s) %s (?, ?, ?)";
+    private static final String RVC_4 = "(%s, %s, %s, %s) %s (?, ?, ?, ?)";
 
     /**
      * Execute the given PreparedStatement, collect all returned items with projected attributes
@@ -41,12 +41,11 @@ public class DQLUtils {
     public static Map<String, Object> executeStatementReturnResult(PreparedStatement stmt,
             List<String> projectionAttributes, boolean useIndex,
             List<PColumn> tablePKCols, List<PColumn> indexPKCols, String tableName,
-            boolean isSingleRowExpected, boolean isScanFirstQuery, boolean countOnly) throws SQLException {
+            boolean isSingleRowExpected, boolean countOnly) throws SQLException {
         int count = 0;
         int bytesSize = 0;
         List<Map<String, Object>> items = new ArrayList<>();
         RawBsonDocument lastBsonDoc = null;
-        boolean sizeLimitReached = false;
         try (ResultSet rs = stmt.executeQuery()) {
             while (rs.next()) {
                 lastBsonDoc = (RawBsonDocument) rs.getObject(1);
@@ -57,7 +56,6 @@ public class DQLUtils {
                 bytesSize +=
                         (int) rs.unwrap(PhoenixResultSet.class).getCurrentRow().getSerializedSize();
                 if (bytesSize >= ApiMetadata.MAX_BYTES_SIZE) {
-                    sizeLimitReached = true;
                     break;
                 }
             }
@@ -73,9 +71,6 @@ public class DQLUtils {
             response.put(ApiMetadata.SCANNED_COUNT, countRowsScanned);
             response.put(ApiMetadata.CONSUMED_CAPACITY,
                     CommonServiceUtils.getConsumedCapacity(tableName));
-            if (isScanFirstQuery) {
-                response.put(SIZE_LIMIT_REACHED, sizeLimitReached);
-            }
             return response;
         } catch (SQLException e) {
             if (e.getMessage() != null && e.getMessage()
@@ -221,22 +216,56 @@ public class DQLUtils {
             // Index has only ihk
             if (tablePKCols.size() == 1) {
                 // (hk) > (?)
-                return String.format(HK_RVC, hk, op);
+                return String.format(RVC_1, hk, op);
             } else {
                 // (hk, sk) > (?, ?)
                 String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
-                return String.format(HK_SK_RVC, hk, sk, op);
+                return String.format(RVC_2, hk, sk, op);
             }
         } else {
             // Index has ihk, isk
             String isk = CommonServiceUtils.getColumnExprFromPCol(indexPKCols.get(1), true);
             if (tablePKCols.size() == 1) {
                 // (isk, hk) > (?, ?)
-                return String.format(ISK_HK_RVC, isk, hk, op);
+                return String.format(RVC_2, isk, hk, op);
             } else {
                 // (isk, hk, sk) > (?, ?, ?)
                 String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
-                return String.format(ISK_HK_SK_RVC, isk, hk, sk, op);
+                return String.format(RVC_3, isk, hk, sk, op);
+            }
+        }
+    }
+
+    public static String getRVCClauseForScan(String op, List<PColumn> tablePKCols,
+                                              boolean useIndex, List<PColumn> indexPKCols) {
+        String hk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(0).getName().toString());
+        if (!useIndex) {
+            if (tablePKCols.size() == 1) {
+                return String.format(RVC_1, hk, op);
+            } else {
+                String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
+                return String.format(RVC_2, hk, sk, op);
+            }
+        }
+        String ihk = CommonServiceUtils.getColumnExprFromPCol(indexPKCols.get(0), true);
+        if (indexPKCols.size() == 1) {
+            if (tablePKCols.size() == 1) {
+                // (ihk, hk) > (?, ?)
+                return String.format(RVC_2, ihk, hk, op);
+            } else {
+                // (ihk, hk, sk) > (?, ?, ?)
+                String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
+                return String.format(RVC_3, ihk, hk, sk, op);
+            }
+        } else {
+            String isk = CommonServiceUtils.getColumnExprFromPCol(indexPKCols.get(1), true);
+            if (tablePKCols.size() == 1) {
+                // (ihk, isk, hk) > (?, ?, ?)
+                return String.format(RVC_3, ihk, isk, hk, op);
+            } else {
+                // (ihk, isk, hk, sk) > (?, ?, ?, ?)
+                String sk = CommonServiceUtils.getEscapedArgument(tablePKCols.get(1).getName().toString());
+                return String.format(RVC_4, ihk, isk, hk, sk, op);
             }
         }
     }

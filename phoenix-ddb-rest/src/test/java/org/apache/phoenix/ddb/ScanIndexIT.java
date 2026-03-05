@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.phoenix.jdbc.PhoenixTestDriver;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
@@ -78,6 +79,7 @@ public class ScanIndexIT {
         utility.startMiniCluster();
         String zkQuorum = "localhost:" + utility.getZkCluster().getClientPort();
         url = PhoenixRuntime.JDBC_PROTOCOL + PhoenixRuntime.JDBC_PROTOCOL_SEPARATOR + zkQuorum;
+        DriverManager.registerDriver(new PhoenixTestDriver());
 
         restServer = new RESTServer(utility.getConfiguration());
         restServer.run();
@@ -476,6 +478,102 @@ public class ScanIndexIT {
         ddbItems.addAll(ddbItems0);
         ddbItems.addAll(ddbItems1);
         TestUtils.verifyItemsEqual(ddbItems, phoenixResult0.items(), "title", null);
+    }
+
+    /**
+     * RVC_1: Paginated scan on a table with hash key only (no sort key, no index).
+     */
+    @Test(timeout = 120000)
+    public void testScanPaginationTableHKOnly() {
+        final String tableName = testName.getMethodName();
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk",
+                        ScalarAttributeType.S, null, null);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        for (int i = 0; i < 6; i++) {
+            Map<String, AttributeValue> item = new HashMap<>();
+            item.put("pk", AttributeValue.builder().s("pk" + i).build());
+            item.put("data", AttributeValue.builder().s("val" + i).build());
+            PutItemRequest req = PutItemRequest.builder().tableName(tableName).item(item).build();
+            phoenixDBClientV2.putItem(req);
+            dynamoDbClient.putItem(req);
+        }
+
+        ScanRequest.Builder sr = ScanRequest.builder().tableName(tableName).limit(2);
+        TestUtils.compareScanOutputs(sr, phoenixDBClientV2, dynamoDbClient,
+                "pk", null, ScalarAttributeType.S, null);
+    }
+
+    /**
+     * RVC_2: Paginated scan on an ihk-only index over a hk-only table.
+     */
+    @Test(timeout = 120000)
+    public void testScanPaginationIHKOnlyIndex_TableHKOnly() throws SQLException {
+        final String tableName = testName.getMethodName();
+        final String indexName = "idx_" + tableName;
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk",
+                        ScalarAttributeType.S, null, null);
+        createTableRequest = DDLTestUtils.addIndexToRequest(true, createTableRequest,
+                indexName, "status", ScalarAttributeType.S, null, null);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        String[] statuses = {"active", "inactive", "active", "pending", "inactive", "active"};
+        for (int i = 0; i < 6; i++) {
+            Map<String, AttributeValue> item = new HashMap<>();
+            item.put("pk", AttributeValue.builder().s("pk" + i).build());
+            item.put("status", AttributeValue.builder().s(statuses[i]).build());
+            item.put("data", AttributeValue.builder().s("val" + i).build());
+            PutItemRequest req = PutItemRequest.builder().tableName(tableName).item(item).build();
+            phoenixDBClientV2.putItem(req);
+            dynamoDbClient.putItem(req);
+        }
+
+        ScanRequest.Builder sr = ScanRequest.builder()
+                .tableName(tableName).indexName(indexName).limit(2);
+        TestUtils.compareScanOutputs(sr, phoenixDBClientV2, dynamoDbClient,
+                "pk", null, ScalarAttributeType.S, null);
+        sr.exclusiveStartKey(null);
+        TestUtils.validateIndexUsed(sr.build(), url, "FULL SCAN ");
+    }
+
+    /**
+     * RVC_3: Paginated scan on an ihk+isk index over a hk-only table.
+     */
+    @Test(timeout = 120000)
+    public void testScanPaginationIHKISKIndex_TableHKOnly() throws SQLException {
+        final String tableName = testName.getMethodName();
+        final String indexName = "idx_" + tableName;
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk",
+                        ScalarAttributeType.S, null, null);
+        createTableRequest = DDLTestUtils.addIndexToRequest(true, createTableRequest,
+                indexName, "status", ScalarAttributeType.S,
+                "timestamp", ScalarAttributeType.N);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        String[] statuses = {"active", "inactive", "active", "pending", "inactive", "active"};
+        for (int i = 0; i < 6; i++) {
+            Map<String, AttributeValue> item = new HashMap<>();
+            item.put("pk", AttributeValue.builder().s("pk" + i).build());
+            item.put("status", AttributeValue.builder().s(statuses[i]).build());
+            item.put("timestamp", AttributeValue.builder().n(String.valueOf(1000 + (i % 3))).build());
+            item.put("data", AttributeValue.builder().s("val" + i).build());
+            PutItemRequest req = PutItemRequest.builder().tableName(tableName).item(item).build();
+            phoenixDBClientV2.putItem(req);
+            dynamoDbClient.putItem(req);
+        }
+
+        ScanRequest.Builder sr = ScanRequest.builder()
+                .tableName(tableName).indexName(indexName).limit(2);
+        TestUtils.compareScanOutputs(sr, phoenixDBClientV2, dynamoDbClient,
+                "pk", null, ScalarAttributeType.S, null);
+        sr.exclusiveStartKey(null);
+        TestUtils.validateIndexUsed(sr.build(), url, "FULL SCAN ");
     }
 
     private static Map<String, AttributeValue> getItem1() {

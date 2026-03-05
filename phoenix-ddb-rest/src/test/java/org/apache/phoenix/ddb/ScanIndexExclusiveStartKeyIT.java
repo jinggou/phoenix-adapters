@@ -57,12 +57,20 @@ import org.apache.phoenix.util.ServerUtil;
 import static org.apache.phoenix.query.BaseTest.setUpConfigForMiniCluster;
 
 /**
- * Tests scan pagination on table with different limits and different combinations of hash and sort key data types.
+ * Tests scan pagination on indexes with different limits and key type combinations.
+ * Items are inserted with deliberate ties on index keys to verify RVC cursor correctness
+ * when multiple rows share the same (ihk, isk) pair.
  */
 @RunWith(Parameterized.class)
-public class ScanExclusiveStartKeyIT {
+public class ScanIndexExclusiveStartKeyIT {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(ScanExclusiveStartKeyIT.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(ScanIndexExclusiveStartKeyIT.class);
+
+    private static final String INDEX_NAME = "test_gsi";
+    private static final String TABLE_HK = "partition_key";
+    private static final String TABLE_SK = "sort_key";
+    private static final String INDEX_HK = "idx_hk";
+    private static final String INDEX_SK = "idx_sk";
 
     private final DynamoDbClient dynamoDbClient =
             LocalDynamoDbTestBase.localDynamoDb().createV2Client();
@@ -75,26 +83,26 @@ public class ScanExclusiveStartKeyIT {
 
     @Rule
     public final TestName testName = new TestName();
-    
-    // Test parameters
+
     public int scanLimit;
     public KeyTypeConfig keyTypeConfig;
     public boolean withFilter;
 
-    // Configuration for different key type combinations
     public static class KeyTypeConfig {
         public final String name;
-        public final ScalarAttributeType hashKeyType;
-        public final ScalarAttributeType sortKeyType;
-        public final String hashKeyName;
-        public final String sortKeyName;
+        public final ScalarAttributeType tableHKType;
+        public final ScalarAttributeType tableSKType;
+        public final ScalarAttributeType indexHKType;
+        public final ScalarAttributeType indexSKType;
 
-        public KeyTypeConfig(String name, ScalarAttributeType hashKeyType, ScalarAttributeType sortKeyType) {
+        public KeyTypeConfig(String name, ScalarAttributeType tableHKType,
+                ScalarAttributeType tableSKType, ScalarAttributeType indexHKType,
+                ScalarAttributeType indexSKType) {
             this.name = name;
-            this.hashKeyType = hashKeyType;
-            this.sortKeyType = sortKeyType;
-            this.hashKeyName = "partition_key";
-            this.sortKeyName = "sort_key";
+            this.tableHKType = tableHKType;
+            this.tableSKType = tableSKType;
+            this.indexHKType = indexHKType;
+            this.indexSKType = indexSKType;
         }
 
         @Override
@@ -106,21 +114,24 @@ public class ScanExclusiveStartKeyIT {
     @Parameterized.Parameters(name = "limit_{0}_keyTypes_{1}_filter_{2}")
     public static synchronized Collection<Object[]> data() {
         List<Object[]> parameters = new ArrayList<>();
-        
-        // Different scan limits to test
-        int[] scanLimits = {1, 2, 3, 4, 5, 6, 7, 8};
-        
-        // Different key type combinations
+
+        int[] scanLimits = {1, 2, 3, 5, 7, 10, 15};
+
         KeyTypeConfig[] keyConfigs = {
-            new KeyTypeConfig("S_N", ScalarAttributeType.S, ScalarAttributeType.N), // String + Number
-            new KeyTypeConfig("B_B", ScalarAttributeType.B, ScalarAttributeType.B), // Binary + Binary  
-            new KeyTypeConfig("B_N", ScalarAttributeType.B, ScalarAttributeType.N), // Binary + Number
-            new KeyTypeConfig("N_S", ScalarAttributeType.N, ScalarAttributeType.S), // Number + String
-            new KeyTypeConfig("N_N", ScalarAttributeType.N, ScalarAttributeType.N), // Number + Number
-            new KeyTypeConfig("S_S", ScalarAttributeType.S, ScalarAttributeType.S), // String + String
-            new KeyTypeConfig("S_B", ScalarAttributeType.S, ScalarAttributeType.B)  // String + Binary
+            new KeyTypeConfig("tSN_iSN", ScalarAttributeType.S, ScalarAttributeType.N,
+                    ScalarAttributeType.S, ScalarAttributeType.N),
+            new KeyTypeConfig("tSS_iNS", ScalarAttributeType.S, ScalarAttributeType.S,
+                    ScalarAttributeType.N, ScalarAttributeType.S),
+            new KeyTypeConfig("tNN_iSS", ScalarAttributeType.N, ScalarAttributeType.N,
+                    ScalarAttributeType.S, ScalarAttributeType.S),
+            new KeyTypeConfig("tSN_iNN", ScalarAttributeType.S, ScalarAttributeType.N,
+                    ScalarAttributeType.N, ScalarAttributeType.N),
+            new KeyTypeConfig("tBN_iSN", ScalarAttributeType.B, ScalarAttributeType.N,
+                    ScalarAttributeType.S, ScalarAttributeType.N),
+            new KeyTypeConfig("tNS_iSB", ScalarAttributeType.N, ScalarAttributeType.S,
+                    ScalarAttributeType.S, ScalarAttributeType.B),
         };
-        
+
         for (int limit : scanLimits) {
             for (KeyTypeConfig config : keyConfigs) {
                 for (boolean filter : new boolean[]{false, true}) {
@@ -128,11 +139,11 @@ public class ScanExclusiveStartKeyIT {
                 }
             }
         }
-        
+
         return parameters;
     }
 
-    public ScanExclusiveStartKeyIT(int scanLimit, KeyTypeConfig keyTypeConfig, boolean withFilter) {
+    public ScanIndexExclusiveStartKeyIT(int scanLimit, KeyTypeConfig keyTypeConfig, boolean withFilter) {
         this.scanLimit = scanLimit;
         this.keyTypeConfig = keyTypeConfig;
         this.withFilter = withFilter;
@@ -177,28 +188,34 @@ public class ScanExclusiveStartKeyIT {
     }
 
     /**
-     * Test getExclusiveStartKeyConditionForScan() logic by creating a table with hash and sort keys,
-     * inserting 56 items (7 hash keys with 8 sort keys each), and scanning with different limits.
-     * This tests both cases:
-     * 1. When last evaluated key has only hash key
-     * 2. When last evaluated key has both hash key and sort key
+     * Test scan pagination on an index where multiple items share the same (ihk, isk) pair.
+     * 56 items (7 table hash keys × 8 sort keys), with index keys cycled to produce ties:
+     *   ihk = hashIndex % 3  → 3 distinct values
+     *   isk = sortIndex % 4  → 4 distinct values
+     * This forces the RVC cursor to rely on the full (ihk, isk, hk, sk) tuple for correctness.
      */
     @Test(timeout = 120000)
-    public void testScanExclusiveStartKeyPagination() {
-        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "_") + 
+    public void testScanIndexExclusiveStartKeyPagination() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "_") +
                 "_limit_" + scanLimit + "_" + keyTypeConfig.name + "_filter_" + withFilter;
-        
-        final int totalItems = 56;
 
         CreateTableRequest createTableRequest =
-                DDLTestUtils.getCreateTableRequest(tableName, keyTypeConfig.hashKeyName,
-                        keyTypeConfig.hashKeyType, keyTypeConfig.sortKeyName, keyTypeConfig.sortKeyType);
+                DDLTestUtils.getCreateTableRequest(tableName, TABLE_HK,
+                        keyTypeConfig.tableHKType, TABLE_SK, keyTypeConfig.tableSKType);
+        createTableRequest = DDLTestUtils.addIndexToRequest(true, createTableRequest,
+                INDEX_NAME, INDEX_HK, keyTypeConfig.indexHKType,
+                INDEX_SK, keyTypeConfig.indexSKType);
+
         phoenixDBClientV2.createTable(createTableRequest);
         dynamoDbClient.createTable(createTableRequest);
 
-        for (int hashIndex = 0; hashIndex < 7; hashIndex++) {
-            for (int sortIndex = 0; sortIndex < 8; sortIndex++) {
-                Map<String, AttributeValue> item = createTestItem(hashIndex, sortIndex, keyTypeConfig);
+        final int numHashKeys = 7;
+        final int numSortKeys = 8;
+        final int totalItems = numHashKeys * numSortKeys;
+
+        for (int hashIndex = 0; hashIndex < numHashKeys; hashIndex++) {
+            for (int sortIndex = 0; sortIndex < numSortKeys; sortIndex++) {
+                Map<String, AttributeValue> item = createTestItem(hashIndex, sortIndex);
                 PutItemRequest putItemRequest = PutItemRequest.builder()
                         .tableName(tableName)
                         .item(item)
@@ -210,43 +227,45 @@ public class ScanExclusiveStartKeyIT {
 
         List<Map<String, AttributeValue>> phoenixItems = new ArrayList<>();
         List<Map<String, AttributeValue>> dynamoItems = new ArrayList<>();
-        
+
         Map<String, AttributeValue> phoenixLastKey = null;
         Map<String, AttributeValue> dynamoLastKey = null;
-        
-        int phoenixPaginationCount = 0;
-        int dynamoPaginationCount = 0;
+
+        int phoenixPageCount = 0;
+        int dynamoPageCount = 0;
 
         do {
-            ScanRequest.Builder dynamoScanRequest = ScanRequest.builder()
+            ScanRequest.Builder sr = ScanRequest.builder()
                     .tableName(tableName)
+                    .indexName(INDEX_NAME)
                     .limit(scanLimit);
-            applyFilter(dynamoScanRequest);
+            applyFilter(sr);
             if (dynamoLastKey != null && !dynamoLastKey.isEmpty()) {
-                dynamoScanRequest.exclusiveStartKey(dynamoLastKey);
+                sr.exclusiveStartKey(dynamoLastKey);
             }
-            ScanResponse dynamoResult = dynamoDbClient.scan(dynamoScanRequest.build());
-            dynamoItems.addAll(dynamoResult.items());
-            dynamoLastKey = dynamoResult.lastEvaluatedKey();
-            dynamoPaginationCount++;
-            LOGGER.info("DynamoDB scan iteration {}, returned {} items, last key: {}", 
-                    dynamoPaginationCount, dynamoResult.count(), dynamoLastKey);
+            ScanResponse response = dynamoDbClient.scan(sr.build());
+            dynamoItems.addAll(response.items());
+            dynamoLastKey = response.lastEvaluatedKey();
+            dynamoPageCount++;
+            LOGGER.info("DynamoDB index scan page {}, returned {} items, lastKey: {}",
+                    dynamoPageCount, response.count(), dynamoLastKey);
         } while (dynamoLastKey != null && !dynamoLastKey.isEmpty());
 
         do {
-            ScanRequest.Builder phoenixScanRequest = ScanRequest.builder()
+            ScanRequest.Builder sr = ScanRequest.builder()
                     .tableName(tableName)
+                    .indexName(INDEX_NAME)
                     .limit(scanLimit);
-            applyFilter(phoenixScanRequest);
+            applyFilter(sr);
             if (phoenixLastKey != null && !phoenixLastKey.isEmpty()) {
-                phoenixScanRequest.exclusiveStartKey(phoenixLastKey);
+                sr.exclusiveStartKey(phoenixLastKey);
             }
-            ScanResponse phoenixResult = phoenixDBClientV2.scan(phoenixScanRequest.build());
-            phoenixItems.addAll(phoenixResult.items());
-            phoenixLastKey = phoenixResult.lastEvaluatedKey();
-            phoenixPaginationCount++;
-            LOGGER.info("Phoenix scan iteration {}, returned {} items, last key: {}",
-                    phoenixPaginationCount, phoenixResult.count(), phoenixLastKey);
+            ScanResponse response = phoenixDBClientV2.scan(sr.build());
+            phoenixItems.addAll(response.items());
+            phoenixLastKey = response.lastEvaluatedKey();
+            phoenixPageCount++;
+            LOGGER.info("Phoenix index scan page {}, returned {} items, lastKey: {}",
+                    phoenixPageCount, response.count(), phoenixLastKey);
         } while (phoenixLastKey != null && !phoenixLastKey.isEmpty());
 
         Assert.assertEquals("Phoenix and DynamoDB should return same number of items",
@@ -260,63 +279,66 @@ public class ScanExclusiveStartKeyIT {
                     totalItems, phoenixItems.size());
         }
 
-        Assert.assertTrue("Phoenix pagination should complete", phoenixPaginationCount > 0);
-        Assert.assertTrue("DynamoDB pagination should complete", dynamoPaginationCount > 0);
+        Assert.assertTrue("Phoenix pagination should complete", phoenixPageCount > 0);
+        Assert.assertTrue("DynamoDB pagination should complete", dynamoPageCount > 0);
+
+        if (scanLimit < totalItems) {
+            Assert.assertTrue("Should require multiple pagination rounds for limit " + scanLimit,
+                    phoenixPageCount > 1);
+        }
 
         List<Map<String, AttributeValue>> sortedPhoenixItems =
-                TestUtils.sortItemsByPartitionAndSortKey(phoenixItems, keyTypeConfig.hashKeyName, keyTypeConfig.sortKeyName);
+                TestUtils.sortItemsByPartitionAndSortKey(phoenixItems, TABLE_HK, TABLE_SK);
         List<Map<String, AttributeValue>> sortedDynamoItems =
-                TestUtils.sortItemsByPartitionAndSortKey(dynamoItems, keyTypeConfig.hashKeyName, keyTypeConfig.sortKeyName);
+                TestUtils.sortItemsByPartitionAndSortKey(dynamoItems, TABLE_HK, TABLE_SK);
         Assert.assertTrue("Phoenix and DynamoDB should return identical items when sorted",
                 ItemComparator.areItemsEqual(sortedPhoenixItems, sortedDynamoItems));
     }
 
-    /**
-     * Create a test item with the given partition key and sort key based on the key type configuration.
-     */
     private void applyFilter(ScanRequest.Builder sr) {
         if (withFilter) {
             Map<String, String> names = new HashMap<>();
-            names.put("#nf", "num_field");
+            names.put("#sc", "score");
             Map<String, AttributeValue> values = new HashMap<>();
-            values.put(":nv", AttributeValue.builder().n("30").build());
-            sr.filterExpression("#nf > :nv")
+            values.put(":sv", AttributeValue.builder().n("300").build());
+            sr.filterExpression("#sc > :sv")
                     .expressionAttributeNames(names)
                     .expressionAttributeValues(values);
         }
     }
 
-    private Map<String, AttributeValue> createTestItem(int hashIndex, int sortIndex, KeyTypeConfig config) {
+    private Map<String, AttributeValue> createTestItem(int hashIndex, int sortIndex) {
         Map<String, AttributeValue> item = new HashMap<>();
-        
-        AttributeValue hashKeyValue = createAttributeValue(config.hashKeyType, hashIndex, "pk");
-        item.put(config.hashKeyName, hashKeyValue);
-        
-        AttributeValue sortKeyValue = createAttributeValue(config.sortKeyType, sortIndex, "sk");
-        item.put(config.sortKeyName, sortKeyValue);
-        
-        item.put("data_field", AttributeValue.builder().s("data_" + hashIndex + "_" + sortIndex).build());
-        item.put("num_field", AttributeValue.builder().n(String.valueOf(hashIndex * 10 + sortIndex)).build());
-        
+
+        item.put(TABLE_HK, createAttributeValue(keyTypeConfig.tableHKType, hashIndex, "pk"));
+        item.put(TABLE_SK, createAttributeValue(keyTypeConfig.tableSKType, sortIndex, "sk"));
+
+        // Cycle index keys to create ties: 3 distinct ihk values, 4 distinct isk values
+        int ihkVal = hashIndex % 3;
+        int iskVal = sortIndex % 4;
+        item.put(INDEX_HK, createAttributeValue(keyTypeConfig.indexHKType, ihkVal, "ihk"));
+        item.put(INDEX_SK, createAttributeValue(keyTypeConfig.indexSKType, iskVal, "isk"));
+
+        item.put("extra_data", AttributeValue.builder()
+                .s("data_" + hashIndex + "_" + sortIndex).build());
+        item.put("score", AttributeValue.builder()
+                .n(String.valueOf(hashIndex * 100 + sortIndex)).build());
+
         return item;
     }
 
-    /**
-     * Create an AttributeValue based on the specified type and index.
-     */
-    private AttributeValue createAttributeValue(ScalarAttributeType type, int index, String prefix) {
+    private AttributeValue createAttributeValue(ScalarAttributeType type, int index,
+            String prefix) {
         switch (type) {
             case S:
                 return AttributeValue.builder().s(prefix + index).build();
             case N:
                 return AttributeValue.builder().n(String.valueOf(index)).build();
             case B:
-                // Create binary data using the index as bytes
                 byte[] bytes = (prefix + index).getBytes();
                 return AttributeValue.builder().b(SdkBytes.fromByteArray(bytes)).build();
             default:
                 throw new IllegalArgumentException("Unsupported attribute type: " + type);
         }
     }
-
-} 
+}
