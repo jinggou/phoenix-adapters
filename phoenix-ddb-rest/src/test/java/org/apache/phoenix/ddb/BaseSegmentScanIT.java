@@ -263,12 +263,23 @@ public abstract class BaseSegmentScanIT {
      */
     protected List<Map<String, AttributeValue>> performFullScanWithPagination(DynamoDbClient client,
             String tableName, boolean useFilter, int filterNum, int scanLimit) {
+        return performFullScanWithPagination(client, tableName, null, useFilter, filterNum, scanLimit);
+    }
+
+    /**
+     * Perform a full scan with pagination, optionally on an index.
+     */
+    protected List<Map<String, AttributeValue>> performFullScanWithPagination(DynamoDbClient client,
+            String tableName, String indexName, boolean useFilter, int filterNum, int scanLimit) {
         List<Map<String, AttributeValue>> allItems = new ArrayList<>();
         Map<String, AttributeValue> lastEvaluatedKey = null;
         do {
             ScanRequest.Builder scanBuilder = ScanRequest.builder()
                     .tableName(tableName)
                     .limit(scanLimit);
+            if (indexName != null) {
+                scanBuilder.indexName(indexName);
+            }
             if (useFilter) {
                 scanBuilder.filterExpression(getFilterExpression(filterNum));
                 Map<String, String> attrNames = getFilterAttributeNames(filterNum);
@@ -322,7 +333,7 @@ public abstract class BaseSegmentScanIT {
     /**
      * Execute batch write for both Phoenix and DynamoDB clients.
      */
-    private void executeBatchWrite(String tableName, List<WriteRequest> batch) {
+    protected void executeBatchWrite(String tableName, List<WriteRequest> batch) {
         Map<String, List<WriteRequest>> requestItems = new HashMap<>();
         requestItems.put(tableName, new ArrayList<>(batch));
         BatchWriteItemRequest batchRequest =
@@ -342,6 +353,21 @@ public abstract class BaseSegmentScanIT {
                                                                                boolean addDelay,
                                                                                boolean useFilter,
                                                                                int filterNum) {
+        return scanSingleSegmentWithPagination(tableName, null, segment, totalSegments,
+                scanLimit, addDelay, useFilter, filterNum);
+    }
+
+    /**
+     * Scan a single segment with pagination, optionally on an index.
+     */
+    protected List<Map<String, AttributeValue>> scanSingleSegmentWithPagination(String tableName,
+                                                                               String indexName,
+                                                                               int segment, 
+                                                                               int totalSegments, 
+                                                                               int scanLimit,
+                                                                               boolean addDelay,
+                                                                               boolean useFilter,
+                                                                               int filterNum) {
         List<Map<String, AttributeValue>> segmentItems = new ArrayList<>();
         Map<String, AttributeValue> lastEvaluatedKey = null;
         
@@ -351,6 +377,9 @@ public abstract class BaseSegmentScanIT {
                     .segment(segment)
                     .totalSegments(totalSegments)
                     .limit(scanLimit);
+            if (indexName != null) {
+                scanBuilder.indexName(indexName);
+            }
             if (useFilter) {
                 scanBuilder.filterExpression(getFilterExpression(filterNum));
                 Map<String, String> attrNames = getFilterAttributeNames(filterNum);

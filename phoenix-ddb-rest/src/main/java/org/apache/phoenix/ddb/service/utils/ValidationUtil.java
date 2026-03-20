@@ -135,7 +135,7 @@ public class ValidationUtil {
     }
 
     public static void validateScanRequest(Map<String, Object> request) {
-        if (ScanService.isSegmentScanRequestOnTable(request)) {
+        if (ScanService.isSegmentScanRequest(request)) {
             Integer segment = (Integer) request.get(ApiMetadata.SEGMENT);
             Integer totalSegments = (Integer) request.get(ApiMetadata.TOTAL_SEGMENTS);
             if (segment < 0) {

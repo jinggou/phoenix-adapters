@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -59,19 +60,20 @@ public class SegmentScanUtil {
      * @return
      */
     public static ScanSegmentInfo getSegmentScanRange(Connection connection, String tableName,
-            int totalSegments, int segmentNumber) throws SQLException {
+            String indexName, int totalSegments, int segmentNumber) throws SQLException {
+        String metadataKey = resolvePhysicalTableName(tableName, indexName);
         PreparedStatement pstmt =
                 connection.prepareStatement(SEGMENT_SCAN_RANGE_METADATA_QUERY);
-        pstmt.setString(1, tableName);
+        pstmt.setString(1, metadataKey);
         pstmt.setInt(2, totalSegments);
         ResultSet rs = pstmt.executeQuery();
         if (rs.next()) {
             String[] startKeys = (String[]) rs.getArray(1).getArray();
             String[] endKeys = (String[]) rs.getArray(2).getArray();
-            return extractSegmentBoundaryFromArray(startKeys, endKeys, tableName, totalSegments,
+            return extractSegmentBoundaryFromArray(startKeys, endKeys, metadataKey, totalSegments,
                     segmentNumber);
         } else {
-            String err = "No segment scan ranges found for table: " + tableName
+            String err = "No segment scan ranges found for table: " + metadataKey
                     + ", total segments: " + totalSegments;
             LOGGER.error(err);
             throw new SQLException(err);
@@ -90,15 +92,16 @@ public class SegmentScanUtil {
      * @return
      */
     public static ScanSegmentInfo updateAndGetSegmentScanRange(Connection connection, String tableName,
-            int totalSegments, int segmentNumber) throws SQLException {
+            String indexName, int totalSegments, int segmentNumber) throws SQLException {
         connection.setAutoCommit(true);
+        String physicalTableName = resolvePhysicalTableName(tableName, indexName);
         Pair<String[], String[]> segmentStartKeysAndEndKeys =
-                executeTotalSegmentsQuery(connection, tableName, totalSegments);
+                executeTotalSegmentsQuery(connection, physicalTableName, totalSegments);
         String[] segmentStartKeys = segmentStartKeysAndEndKeys.getFirst();
         String[] segmentEndKeys = segmentStartKeysAndEndKeys.getSecond();
         PreparedStatement pstmt =
                 connection.prepareStatement(SEGMENT_SCAN_RANGE_METADATA_UPDATE);
-        pstmt.setString(1, tableName);
+        pstmt.setString(1, physicalTableName);
         pstmt.setInt(2, totalSegments);
         pstmt.setArray(3, connection.createArrayOf("VARCHAR", segmentStartKeys));
         pstmt.setArray(4, connection.createArrayOf("VARCHAR", segmentEndKeys));
@@ -109,11 +112,11 @@ public class SegmentScanUtil {
         if (rs == null) {
             throw new SQLException(
                     "No segment scan ranges were returned after metadata update for table: "
-                            + tableName + ", total segments: " + totalSegments);
+                            + physicalTableName + ", total segments: " + totalSegments);
         }
         String[] startKeys = (String[]) rs.getArray(3).getArray();
         String[] endKeys = (String[]) rs.getArray(4).getArray();
-        return extractSegmentBoundaryFromArray(startKeys, endKeys, tableName, totalSegments,
+        return extractSegmentBoundaryFromArray(startKeys, endKeys, physicalTableName, totalSegments,
                 segmentNumber);
     }
 
@@ -143,6 +146,17 @@ public class SegmentScanUtil {
         }
         return new Pair<>(segmentStartKeys.toArray(new String[0]),
                 segmentEndKeys.toArray(new String[0]));
+    }
+
+    /**
+     * For index scans, the physical table is the index table (tableName_indexName).
+     * For table scans, it is simply the table name.
+     */
+    private static String resolvePhysicalTableName(String tableName, String indexName) {
+        if (StringUtils.isEmpty(indexName)) {
+            return tableName;
+        }
+        return PhoenixUtils.getInternalIndexName(tableName, indexName);
     }
 
     /**

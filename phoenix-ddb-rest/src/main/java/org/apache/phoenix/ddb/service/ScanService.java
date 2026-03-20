@@ -60,11 +60,6 @@ public class ScanService {
         handleLegacyParamsConversion(request);
         CommonServiceUtils.handleLegacyProjectionConversion(request);
 
-        // Segment Scan on indexes is not yet supported - we will return all items for segment 0.
-        if (isSegmentScanRequestOnIndex(request) && (Integer) request.get(ApiMetadata.SEGMENT) > 0) {
-            return buildEmptyScanResponse(request);
-        }
-
         try (Connection connection = ConnectionUtil.getConnection(connectionUrl)) {
             return executeScan(connection, request);
         } catch (SQLException e) {
@@ -94,7 +89,7 @@ public class ScanService {
         );
 
         // Set segment info if this is a segment scan
-        if (isSegmentScanRequestOnTable(request)) {
+        if (isSegmentScanRequest(request)) {
             ScanSegmentInfo segmentInfo = getSegmentInfo(connection, request);
             // Return empty result if segment doesn't exist
             if (segmentInfo == null || segmentInfo.isEmptySegment()) {
@@ -324,19 +319,9 @@ public class ScanService {
     /**
      * Check if the request is for a segment scan
      */
-    public static boolean isSegmentScanRequestOnTable(Map<String, Object> request) {
+    public static boolean isSegmentScanRequest(Map<String, Object> request) {
         return request.get(ApiMetadata.SEGMENT) != null
-                && request.get(ApiMetadata.TOTAL_SEGMENTS) != null
-                && StringUtils.isEmpty((String)request.get(ApiMetadata.INDEX_NAME));
-    }
-
-    /**
-     * Check if the request is for a segment scan
-     */
-    public static boolean isSegmentScanRequestOnIndex(Map<String, Object> request) {
-        return request.get(ApiMetadata.SEGMENT) != null
-                && request.get(ApiMetadata.TOTAL_SEGMENTS) != null
-                && !StringUtils.isEmpty((String)request.get(ApiMetadata.INDEX_NAME));
+                && request.get(ApiMetadata.TOTAL_SEGMENTS) != null;
     }
 
     /**
@@ -347,6 +332,7 @@ public class ScanService {
         Integer segment = (Integer) request.get(ApiMetadata.SEGMENT);
         Integer totalSegments = (Integer) request.get(ApiMetadata.TOTAL_SEGMENTS);
         String tableName = (String) request.get(ApiMetadata.TABLE_NAME);
+        String indexName = (String) request.get(ApiMetadata.INDEX_NAME);
         Map<String, Object> exclusiveStartKey =
                 (Map<String, Object>) request.get(ApiMetadata.EXCLUSIVE_START_KEY);
 
@@ -354,11 +340,10 @@ public class ScanService {
         if (exclusiveStartKey == null || exclusiveStartKey.isEmpty()) {
             // First page - generate and get segment boundaries
             return SegmentScanUtil.updateAndGetSegmentScanRange(connection, tableName,
-                    totalSegments, segment);
+                    indexName, totalSegments, segment);
         } else {
-            // Subsequent page - boundaries should already exist
-            return SegmentScanUtil.getSegmentScanRange(connection, tableName, totalSegments,
-                    segment);
+            return SegmentScanUtil.getSegmentScanRange(connection, tableName, indexName,
+                    totalSegments, segment);
         }
     }
 
