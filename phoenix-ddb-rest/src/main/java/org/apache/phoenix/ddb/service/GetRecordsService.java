@@ -213,6 +213,9 @@ public class GetRecordsService {
             record.put(ApiMetadata.EVENT_NAME, "MODIFY");
         }
         record.put(ApiMetadata.EVENT_ID, DdbAdapterCdcUtils.getEventId(tableName, partitionId, seqNum));
+        record.put(ApiMetadata.EVENT_VERSION, ApiMetadata.EVENT_VERSION_VALUE);
+        record.put(ApiMetadata.EVENT_SOURCE, ApiMetadata.EVENT_SOURCE_VALUE);
+        record.put(ApiMetadata.AWS_REGION, ApiMetadata.AWS_REGION_VALUE);
         return record;
     }
 }

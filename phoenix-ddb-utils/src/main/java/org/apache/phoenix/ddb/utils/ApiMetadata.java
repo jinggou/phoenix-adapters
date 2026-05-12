@@ -156,9 +156,16 @@ public class ApiMetadata {
     public static final String KEYS = "Keys";
     public static final String SIZE_BYTES = "SizeBytes";
     public static final String EVENT_ID = "eventID";
+    public static final String EVENT_VERSION = "eventVersion";
+    public static final String EVENT_SOURCE = "eventSource";
+    public static final String AWS_REGION = "awsRegion";
     public static final String USER_IDENTITY = "userIdentity";
     public static final String TYPE = "Type";
     public static final String PRINCIPAL_ID = "PrincipalId";
+
+    public static final String EVENT_VERSION_VALUE = "1.1";
+    public static final String EVENT_SOURCE_VALUE = "aws:dynamodb";
+    public static final String AWS_REGION_VALUE = "us-west-2";
 
     // API Operation Names
     public static final String CREATE_TABLE = "CreateTable";

@@ -251,6 +251,12 @@ public class TestUtils {
                     dr.dynamodb().sizeBytes() > 0);
             Assert.assertTrue("Phoenix record size should be greater than 0 for record " + i,
                     pr.dynamodb().sizeBytes() > 0);
+            Assert.assertEquals("eventVersion should match for record " + i, dr.eventVersion(),
+                    pr.eventVersion());
+            Assert.assertEquals("eventSource should match for record " + i, dr.eventSource(),
+                    pr.eventSource());
+            Assert.assertEquals("Phoenix awsRegion should match for record " + i,
+                    ApiMetadata.AWS_REGION_VALUE, pr.awsRegion());
         }
         assertEventIdsUnique(phoenixRecords);
     }

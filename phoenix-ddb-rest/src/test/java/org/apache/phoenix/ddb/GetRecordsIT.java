@@ -30,6 +30,7 @@ import org.apache.phoenix.thirdparty.com.google.common.collect.Maps;
 import org.apache.phoenix.util.PhoenixRuntime;
 import org.apache.phoenix.util.ReadOnlyProps;
 import org.apache.phoenix.util.ServerUtil;
+import org.apache.phoenix.ddb.utils.ApiMetadata;
 import org.apache.phoenix.ddb.utils.PhoenixUtils;
 
 import org.junit.AfterClass;
@@ -490,6 +491,9 @@ public class GetRecordsIT {
         Assert.assertNotNull("eventID must be present", phoenixRecord.eventID());
         Assert.assertTrue("eventID must be 32-char hex",
                 phoenixRecord.eventID().matches("[0-9a-f]{32}"));
+        Assert.assertEquals(ApiMetadata.EVENT_VERSION_VALUE, phoenixRecord.eventVersion());
+        Assert.assertEquals(ApiMetadata.EVENT_SOURCE_VALUE, phoenixRecord.eventSource());
+        Assert.assertEquals(ApiMetadata.AWS_REGION_VALUE, phoenixRecord.awsRegion());
     }
 
 }
