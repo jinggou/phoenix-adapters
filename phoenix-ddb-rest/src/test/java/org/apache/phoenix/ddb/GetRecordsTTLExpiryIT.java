@@ -300,7 +300,7 @@ public class GetRecordsTTLExpiryIT extends GetRecordsBaseTest  {
                     null, null);
             Assert.assertEquals(1, daughterRecordsAfterCompaction.size());
             Assert.assertNotNull(daughterRecordsAfterCompaction.get(0).userIdentity());
-            Assert.assertEquals("phoenix/hbase", daughterRecordsAfterCompaction.get(0).userIdentity().principalId());
+            Assert.assertEquals("dynamodb.amazonaws.com", daughterRecordsAfterCompaction.get(0).userIdentity().principalId());
             Assert.assertEquals("Service", daughterRecordsAfterCompaction.get(0).userIdentity().type());
         }
 
@@ -401,7 +401,7 @@ public class GetRecordsTTLExpiryIT extends GetRecordsBaseTest  {
         records = TestUtils.getRecordsFromShardWithLimit(phoenixDBStreamsClientV2, phoenixStreamArn, parentShard, TRIM_HORIZON, null,null);
         Assert.assertEquals(1, records.size());
         Assert.assertNotNull(records.get(0).userIdentity());
-        Assert.assertEquals("phoenix/hbase", records.get(0).userIdentity().principalId());
+        Assert.assertEquals("dynamodb.amazonaws.com", records.get(0).userIdentity().principalId());
         Assert.assertEquals("Service", records.get(0).userIdentity().type());
         EnvironmentEdgeManager.reset();
     }

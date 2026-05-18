@@ -1562,7 +1562,7 @@ Reads change records from a shard using a shard iterator.
       },
       "userIdentity": {
         "Type": "Service",
-        "PrincipalId": "phoenix/hbase"
+        "PrincipalId": "dynamodb.amazonaws.com"
       }
     }
   ],

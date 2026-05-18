@@ -46,7 +46,7 @@ public class GetRecordsService {
     private static final String NEW_IMAGE = "NEW_IMAGE";
     private static final String NEW_AND_OLD_IMAGES = "NEW_AND_OLD_IMAGES";
     private static final String SERVICE = "Service";
-    private static final String PRINCIPAL_ID = "phoenix/hbase";
+    private static final String PRINCIPAL_ID = "dynamodb.amazonaws.com";
 
     /**
      * Notes:
