@@ -18,8 +18,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.MAX_NUM_CHANGES_AT_TIMESTAMP;
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_CDC_STREAM_NAME;
@@ -33,14 +36,23 @@ public class DescribeStreamService {
             = "SELECT PARTITION_ID, PARENT_PARTITION_ID, PARTITION_START_TIME, PARTITION_END_TIME FROM "
             + SYSTEM_CDC_STREAM_NAME + " WHERE TABLE_NAME = '%s' AND STREAM_NAME = '%s' ";
 
-    public static Map<String, Object> describeStream(Map<String, Object> request, String connectionUrl) {
-        String streamName = (String) request.get(ApiMetadata.STREAM_ARN);
+    private static final String PARENT_PARTITION_START_TIMES_QUERY
+            = "SELECT PARTITION_ID, PARTITION_START_TIME FROM "
+            + SYSTEM_CDC_STREAM_NAME
+            + " WHERE TABLE_NAME = '%s' AND STREAM_NAME = '%s' AND PARTITION_ID IN (%s)";
+
+    public static Map<String, Object> describeStream(Map<String, Object> request,
+        String connectionUrl) {
+        String streamArnInput = (String) request.get(ApiMetadata.STREAM_ARN);
+        String streamName = DdbAdapterCdcUtils.normalizeStreamName(streamArnInput);
+        String streamArn = DdbAdapterCdcUtils.isStreamArn(streamArnInput) ?
+            streamArnInput : DdbAdapterCdcUtils.toStreamArn(streamName);
         String exclusiveStartShardId = (String) request.get(ApiMetadata.EXCLUSIVE_START_SHARD_ID);
         Integer limit = (Integer) request.getOrDefault(ApiMetadata.LIMIT, MAX_LIMIT);
         String tableName = DdbAdapterCdcUtils.getTableNameFromStreamName(streamName);
         Map<String, Object> streamDesc;
         try (Connection conn = ConnectionUtil.getConnection(connectionUrl)) {
-            streamDesc = getStreamDescriptionObject(conn, tableName, streamName);
+            streamDesc = getStreamDescriptionObject(conn, tableName, streamName, streamArn);
             String streamStatus = DdbAdapterCdcUtils.getStreamStatus(conn, tableName, streamName);
             streamDesc.put(ApiMetadata.STREAM_STATUS, streamStatus);
             // query partitions only if stream is ENABLED
@@ -48,19 +60,55 @@ public class DescribeStreamService {
                 StringBuilder sb = new StringBuilder(String.format(DESCRIBE_STREAM_QUERY, tableName, streamName));
                 if (!StringUtils.isEmpty(exclusiveStartShardId)) {
                     sb.append(" AND PARTITION_ID > '");
-                    sb.append(exclusiveStartShardId);
+                    sb.append(DdbAdapterCdcUtils.partitionIdFromShardId(exclusiveStartShardId));
                     sb.append("'");
                 }
                 sb.append(" LIMIT ");
                 sb.append(limit);
                 LOGGER.debug("Describe Stream Query: {}", sb);
-                List<Map<String, Object>> shards = new ArrayList<>();
-                String lastEvaluatedShardId = null;
+
+                List<Map<String, Object>> rawShards = new ArrayList<>();
+                Map<String, Long> partitionStartTimes = new HashMap<>();
+                Set<String> parentIdsNeeded = new HashSet<>();
                 ResultSet rs = conn.createStatement().executeQuery(sb.toString());
                 int count = 0;
                 while (rs.next()) {
                     count++;
-                    Map<String, Object> shard = getShardMetadata(rs);
+                    Map<String, Object> raw = new HashMap<>();
+                    String partitionId = rs.getString(1);
+                    String parentPartitionId = rs.getString(2);
+                    long partitionStartTime = rs.getLong(3);
+                    long partitionEndTime = rs.getLong(4);
+                    raw.put("partitionId", partitionId);
+                    raw.put("parentPartitionId", parentPartitionId);
+                    raw.put("partitionStartTime", partitionStartTime);
+                    raw.put("partitionEndTime", partitionEndTime);
+                    rawShards.add(raw);
+                    partitionStartTimes.put(partitionId, partitionStartTime);
+                    if (parentPartitionId != null) {
+                        parentIdsNeeded.add(parentPartitionId);
+                    }
+                }
+                // Parents already in the current page don't need a second query.
+                parentIdsNeeded.removeAll(partitionStartTimes.keySet());
+
+                if (!parentIdsNeeded.isEmpty()) {
+                    String inClause = parentIdsNeeded.stream()
+                            .map(id -> "'" + id + "'")
+                            .collect(Collectors.joining(","));
+                    String parentQuery = String.format(PARENT_PARTITION_START_TIMES_QUERY,
+                            tableName, streamName, inClause);
+                    LOGGER.debug("Parent Partition Start Times Query: {}", parentQuery);
+                    ResultSet prs = conn.createStatement().executeQuery(parentQuery);
+                    while (prs.next()) {
+                        partitionStartTimes.put(prs.getString(1), prs.getLong(2));
+                    }
+                }
+
+                List<Map<String, Object>> shards = new ArrayList<>();
+                String lastEvaluatedShardId = null;
+                for (Map<String, Object> raw : rawShards) {
+                    Map<String, Object> shard = buildShardMetadata(raw, partitionStartTimes);
                     shards.add(shard);
                     lastEvaluatedShardId = (String) shard.get(ApiMetadata.SHARD_ID);
                 }
@@ -81,14 +129,12 @@ public class DescribeStreamService {
      * Return a StreamDescription object for the given tableName and streamName.
      * Populate all attributes except the list of the shards.
      */
-    private static Map<String, Object> getStreamDescriptionObject(Connection conn,
-                                                                        String tableName,
-                                                                        String streamName)
-            throws SQLException {
+    private static Map<String, Object> getStreamDescriptionObject(Connection conn, String tableName,
+        String streamName, String streamArn) throws SQLException {
         PhoenixConnection pconn = conn.unwrap(PhoenixConnection.class);
         PTable table = pconn.getTable(tableName);
         Map<String, Object> streamDesc = new HashMap<>();
-        streamDesc.put(ApiMetadata.STREAM_ARN, streamName);
+        streamDesc.put(ApiMetadata.STREAM_ARN, streamArn);
         streamDesc.put(ApiMetadata.TABLE_NAME, PhoenixUtils.getTableNameFromFullName(tableName, false));
         long creationTS = DdbAdapterCdcUtils.getCDCIndexTimestampFromStreamName(streamName);
         streamDesc.put(ApiMetadata.STREAM_LABEL, DdbAdapterCdcUtils.getStreamLabel(streamName));
@@ -100,23 +146,38 @@ public class DescribeStreamService {
     }
 
     /**
-     * Build a Shard object using a ResultSet cursor from a query on SYSTEM.CDC_STREAM.
+     * Build a Shard response object from a buffered partition row and a precomputed map
+     * of {@code partitionId -> partitionStartTime} (including any parents pulled from the
+     * batch parent lookup).
      */
-    private static Map<String, Object> getShardMetadata(ResultSet rs) throws SQLException {
-        // rs --> id, parentId, startTime, endTime
+    private static Map<String, Object> buildShardMetadata(Map<String, Object> raw,
+        Map<String, Long> partitionStartTimes) {
+        String partitionId = (String) raw.get("partitionId");
+        String parentPartitionId = (String) raw.get("parentPartitionId");
+        long partitionStartTime = (Long) raw.get("partitionStartTime");
+        long partitionEndTime = (Long) raw.get("partitionEndTime");
+
         Map<String, Object> shard = new HashMap<>();
-        // shard id
-        shard.put(ApiMetadata.SHARD_ID, rs.getString(1));
-        // parent shard id
-        if (rs.getString(2) != null) {
-            shard.put(ApiMetadata.PARENT_SHARD_ID, rs.getString(2));
+        shard.put(ApiMetadata.SHARD_ID,
+            DdbAdapterCdcUtils.toShardId(partitionStartTime, partitionId));
+        if (parentPartitionId != null) {
+            Long parentStartTime = partitionStartTimes.get(parentPartitionId);
+            if (parentStartTime != null) {
+                shard.put(ApiMetadata.PARENT_SHARD_ID,
+                    DdbAdapterCdcUtils.toShardId(parentStartTime, parentPartitionId));
+            } else {
+                LOGGER.info("Parent partition {} for partition {} is no longer present in "
+                    + "SYSTEM.CDC_STREAM (likely TTLed); omitting ParentShardId "
+                    + "from the response.", parentPartitionId, partitionId);
+            }
         }
-        // start sequence number
         Map<String, Object> seqNumRange = new HashMap<>();
-        seqNumRange.put(ApiMetadata.STARTING_SEQUENCE_NUMBER, String.valueOf(rs.getLong(3) * MAX_NUM_CHANGES_AT_TIMESTAMP));
-        // end sequence number
-        if (rs.getLong(4) > 0) {
-            seqNumRange.put(ApiMetadata.ENDING_SEQUENCE_NUMBER, String.valueOf(((rs.getLong(4)+1) * MAX_NUM_CHANGES_AT_TIMESTAMP) - 1));
+        seqNumRange.put(ApiMetadata.STARTING_SEQUENCE_NUMBER,
+            DdbAdapterCdcUtils.getSequenceNumber(partitionStartTime, 0));
+        if (partitionEndTime > 0) {
+            seqNumRange.put(ApiMetadata.ENDING_SEQUENCE_NUMBER,
+                DdbAdapterCdcUtils.getSequenceNumber(partitionEndTime,
+                    MAX_NUM_CHANGES_AT_TIMESTAMP - 1));
         }
         shard.put(ApiMetadata.SEQUENCE_NUMBER_RANGE, seqNumRange);
         return shard;

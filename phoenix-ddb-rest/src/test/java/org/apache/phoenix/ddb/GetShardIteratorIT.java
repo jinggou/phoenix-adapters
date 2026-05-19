@@ -50,11 +50,16 @@ import software.amazon.awssdk.services.dynamodb.model.StreamDescription;
 import software.amazon.awssdk.services.dynamodb.model.StreamStatus;
 import software.amazon.awssdk.services.dynamodb.streams.DynamoDbStreamsClient;
 
+import org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils;
+import org.apache.phoenix.ddb.utils.PhoenixShardIterator;
+
 import java.sql.DriverManager;
 import java.util.Map;
 
 import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.MAX_NUM_CHANGES_AT_TIMESTAMP;
 import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.SHARD_ITERATOR_DELIM;
+import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.SHARD_ITERATOR_NUM_PARTS;
+import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.SHARD_ITERATOR_VERSION;
 import static org.apache.phoenix.query.BaseTest.setUpConfigForMiniCluster;
 import static software.amazon.awssdk.services.dynamodb.model.ShardIteratorType.AFTER_SEQUENCE_NUMBER;
 import static software.amazon.awssdk.services.dynamodb.model.ShardIteratorType.AT_SEQUENCE_NUMBER;
@@ -173,26 +178,30 @@ public class GetShardIteratorIT {
                 .shardId(shardId);
 
         String testSeqNum = "173837205000000420"; // 1738372050000+00420
-        String testSeqNumPlusOne = String.valueOf(Long.parseLong(testSeqNum) + 1); // 1738372050000+00421
+        long testSeqNumLong = Long.parseLong(testSeqNum);
         //AT_SEQUENCE_NUMBER
         request.sequenceNumber(testSeqNum);
         request.shardIteratorType(AT_SEQUENCE_NUMBER);
         GetShardIteratorResponse result = phoenixDBStreamsClientV2.getShardIterator(request.build());
         validateShardIterator(result.shardIterator(), tableName, "CDC_"+tableName, "OLD_IMAGE", shardId);
-        Assert.assertTrue(result.shardIterator().contains(testSeqNum));
+        // The iterator's inner seqNum is the canonical 21-digit form of testSeqNum.
+        Assert.assertEquals(testSeqNumLong,
+                Long.parseLong(new PhoenixShardIterator(result.shardIterator()).getSeqNum()));
 
         //AFTER_SEQUENCE_NUMBER
         request.shardIteratorType(AFTER_SEQUENCE_NUMBER);
         result = phoenixDBStreamsClientV2.getShardIterator(request.build());
         validateShardIterator(result.shardIterator(), tableName, "CDC_"+tableName, "OLD_IMAGE", shardId);
-        Assert.assertTrue(result.shardIterator().contains(testSeqNumPlusOne));
+        Assert.assertEquals(testSeqNumLong + 1,
+                Long.parseLong(new PhoenixShardIterator(result.shardIterator()).getSeqNum()));
 
         //TRIM_HORIZON
         request.sequenceNumber(null);
         request.shardIteratorType(TRIM_HORIZON);
         result = phoenixDBStreamsClientV2.getShardIterator(request.build());
         validateShardIterator(result.shardIterator(), tableName, "CDC_"+tableName, "OLD_IMAGE", shardId);
-        Assert.assertTrue(result.shardIterator().contains(shardStartSeqNum));
+        Assert.assertEquals(Long.parseLong(shardStartSeqNum),
+                Long.parseLong(new PhoenixShardIterator(result.shardIterator()).getSeqNum()));
 
         //LATEST
         request.sequenceNumber(null);
@@ -200,18 +209,27 @@ public class GetShardIteratorIT {
         request.shardIteratorType(LATEST);
         result = phoenixDBStreamsClientV2.getShardIterator(request.build());
         validateShardIterator(result.shardIterator(), tableName, "CDC_"+tableName, "OLD_IMAGE", shardId);
-        String[] shardIter = result.shardIterator().split(SHARD_ITERATOR_DELIM);
         // shard iterator would be created after the current time we recorded here
-        Assert.assertTrue(Long.parseLong(shardIter[shardIter.length-1]) > currentTime * MAX_NUM_CHANGES_AT_TIMESTAMP);
+        long latestSeqNum = Long.parseLong(
+                new PhoenixShardIterator(result.shardIterator()).getSeqNum());
+        Assert.assertTrue(latestSeqNum > currentTime * MAX_NUM_CHANGES_AT_TIMESTAMP);
     }
 
     private void validateShardIterator(String shardIter, String tableName, String cdcObj,
                                        String streamType, String shardId) {
         LOGGER.info("Shard Iterator: " + shardIter);
-        Assert.assertTrue(shardIter.contains(tableName));
-        Assert.assertTrue(shardIter.contains(cdcObj));
-        Assert.assertTrue(shardIter.contains(streamType));
-        Assert.assertTrue(shardIter.contains(shardId));
+        Assert.assertTrue("must start with canonical streamArn, was: " + shardIter,
+            shardIter.startsWith("arn:aws:dynamodb:us-west-2:000000000000:table/"
+                + tableName + "/stream/"));
+        String[] parts = shardIter.split(java.util.regex.Pattern.quote(SHARD_ITERATOR_DELIM), -1);
+        Assert.assertEquals(SHARD_ITERATOR_NUM_PARTS, parts.length);
+        Assert.assertEquals(SHARD_ITERATOR_VERSION, parts[1]);
+        PhoenixShardIterator parsed = new PhoenixShardIterator(shardIter);
+        Assert.assertEquals("DDB." + tableName, parsed.getTableName());
+        Assert.assertEquals(cdcObj, parsed.getCdcObject());
+        Assert.assertEquals(streamType, parsed.getStreamType());
+        Assert.assertEquals(DdbAdapterCdcUtils.partitionIdFromShardId(shardId),
+            parsed.getPartitionId());
     }
 
 }

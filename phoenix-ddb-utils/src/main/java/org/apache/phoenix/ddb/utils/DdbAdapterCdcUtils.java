@@ -15,9 +15,15 @@ import java.security.NoSuchAlgorithmException;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.format.ResolverStyle;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import static org.apache.phoenix.jdbc.PhoenixDatabaseMetaData.SYSTEM_CDC_STREAM_NAME;
@@ -34,13 +40,33 @@ public class DdbAdapterCdcUtils {
     public static final int OFFSET_LENGTH = 5;
     public static final int MAX_NUM_CHANGES_AT_TIMESTAMP = (int) Math.pow(10, OFFSET_LENGTH);
 
-    // shardIterator/<tableName>/<cdcObject>/<streamType>/<partitionID>/<startSeqNum>
-    public static final String SHARD_ITERATOR_FORMAT = "shardIterator/%s/%s/%s/%s/%s";
-    public static final String SHARD_ITERATOR_DELIM = "/";
-    public static final int SHARD_ITERATOR_NUM_PARTS = 6;
+    public static final String SHARD_ITERATOR_VERSION = "1";
+    public static final String SHARD_ITERATOR_DELIM = "|";
+    public static final int SHARD_ITERATOR_NUM_PARTS = 3;
+    // JSON key names for the inner state payload of shard iterator
+    public static final String SI_FIELD_STREAM_TYPE = "streamType";
+    public static final String SI_FIELD_PARTITION_ID = "partitionId";
+    public static final String SI_FIELD_SEQ_NUM = "seqNum";
     // phoenix/cdc/stream/{tableName}/{cdc object name}/{cdc index timestamp}/{creation datetime}
     public static final String STREAM_NAME_DELIM = "/";
     public static final int STREAM_NAME_NUM_PARTS = 7;
+    public static final String STREAM_NAME_PREFIX = "phoenix/cdc/stream/";
+    public static final String CDC_OBJECT_PREFIX = "CDC_";
+
+    public static final String STREAM_ARN_REGION = "us-west-2";
+    public static final String STREAM_ARN_ACCOUNT_ID = "000000000000";
+    public static final String STREAM_ARN_PREFIX =
+        "arn:aws:dynamodb:" + STREAM_ARN_REGION + ":" + STREAM_ARN_ACCOUNT_ID + ":table/";
+    public static final String STREAM_ARN_INFIX = "/stream/";
+
+    // ShardId format: shardId-<partitionStartMs>-<32-char-hex-partition-id>
+    public static final String SHARD_ID_PREFIX = "shardId-";
+    private static final String SHARD_ID_DELIM = "-";
+    public static final String STREAM_LABEL_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    private static final String STREAM_LABEL_PARSE_PATTERN = "uuuu-MM-dd'T'HH:mm:ss.SSS";
+    private static final DateTimeFormatter STREAM_LABEL_FORMATTER =
+        DateTimeFormatter.ofPattern(STREAM_LABEL_PARSE_PATTERN, Locale.ROOT)
+            .withResolverStyle(ResolverStyle.STRICT).withZone(ZoneOffset.UTC);
 
     private static final String STREAM_NAME_QUERY
             = "SELECT STREAM_NAME FROM " + SYSTEM_CDC_STREAM_STATUS_NAME
@@ -146,6 +172,106 @@ public class DdbAdapterCdcUtils {
     }
 
     /**
+     * Detect whether the given identifier is the AWS-shaped stream ARN
+     * rather than the internal stream name.
+     */
+    public static boolean isStreamArn(String s) {
+        return s != null && s.startsWith(STREAM_ARN_PREFIX);
+    }
+
+    /**
+     * Convert the internal stream name to the AWS-shaped ARN
+     * (e.g. arn:aws:dynamodb:us-west-2:000000000000:table/MyTable/stream/2024-01-15T10:30:00.000).
+     */
+    public static String toStreamArn(String streamName) {
+        String internalTableName = getTableNameFromStreamName(streamName);
+        String bareTableName = PhoenixUtils.getTableNameFromFullName(internalTableName, false);
+        String creationDateTime = getStreamLabel(streamName);
+        return STREAM_ARN_PREFIX + bareTableName + STREAM_ARN_INFIX + creationDateTime;
+    }
+
+    /**
+     * Convert the AWS-shaped stream ARN back to the internal stream name.
+     */
+    public static String fromStreamArn(String streamArn) {
+        if (!isStreamArn(streamArn)) {
+            throw new IllegalArgumentException("Not a synthetic stream ARN: " + streamArn);
+        }
+        String body = streamArn.substring(STREAM_ARN_PREFIX.length());
+        int infixIdx = body.indexOf(STREAM_ARN_INFIX);
+        if (infixIdx < 0) {
+            throw new IllegalArgumentException("Stream ARN missing /stream/ segment: " + streamArn);
+        }
+        String arnTableName = body.substring(0, infixIdx);
+        String creationDateTime = body.substring(infixIdx + STREAM_ARN_INFIX.length());
+        long cdcIndexTimestamp = parseCreationDateTime(creationDateTime, streamArn);
+        String bareTableName = PhoenixUtils.getTableNameFromFullName(arnTableName, false);
+        String internalTableName = PhoenixUtils.getFullTableName(bareTableName, false);
+        return STREAM_NAME_PREFIX + internalTableName + STREAM_NAME_DELIM
+            + CDC_OBJECT_PREFIX + bareTableName + STREAM_NAME_DELIM
+            + cdcIndexTimestamp + STREAM_NAME_DELIM + creationDateTime;
+    }
+
+    public static String normalizeStreamName(String streamArnOrName) {
+        if (streamArnOrName == null || streamArnOrName.isEmpty()) {
+            throw new IllegalArgumentException("StreamArn is required");
+        }
+        return isStreamArn(streamArnOrName) ? fromStreamArn(streamArnOrName) : streamArnOrName;
+    }
+
+    /**
+     * Encode an internal Phoenix partition into the AWS-shaped {@code ShardId}
+     * {@code shardId-<partitionStartMs>-<partitionHex>}. Length stays in the AWS
+     * spec range [28, 65] for any positive epoch-millis and the 32-char HBase region
+     * encoded partition id.
+     *
+     * @param partitionStartMs epoch millis of the partition's start time
+     * @param partitionHex     HBase region encoded partition id (32-char lowercase hex)
+     */
+    public static String toShardId(long partitionStartMs, String partitionHex) {
+        return SHARD_ID_PREFIX + partitionStartMs + SHARD_ID_DELIM + partitionHex;
+    }
+
+    /**
+     * Detect whether the given identifier is the AWS-shaped {@code ShardId} rather than
+     * the raw HBase region encoded partition id.
+     */
+    public static boolean isShardId(String s) {
+        return s != null && s.startsWith(SHARD_ID_PREFIX);
+    }
+
+    /**
+     * Extract the bare HBase region encoded partition id from either the new
+     * AWS-shaped {@code ShardId} ({@code shardId-<ms>-<hex>}) or a raw partition
+     * hex string.
+     */
+    public static String partitionIdFromShardId(String shardIdOrPartitionHex) {
+        if (shardIdOrPartitionHex == null || shardIdOrPartitionHex.isEmpty()) {
+            throw new IllegalArgumentException("ShardId is required");
+        }
+        if (!isShardId(shardIdOrPartitionHex)) {
+            return shardIdOrPartitionHex;
+        }
+        String body = shardIdOrPartitionHex.substring(SHARD_ID_PREFIX.length());
+        int dashIdx = body.indexOf(SHARD_ID_DELIM);
+        if (dashIdx < 0 || dashIdx == body.length() - 1) {
+            throw new IllegalArgumentException(
+                "ShardId missing partition hex segment: " + shardIdOrPartitionHex);
+        }
+        return body.substring(dashIdx + 1);
+    }
+
+    private static long parseCreationDateTime(String creationDateTime, String streamArn) {
+        try {
+            return STREAM_LABEL_FORMATTER.parse(creationDateTime, Instant::from).toEpochMilli();
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                "Stream ARN label is not a UTC ISO timestamp (" + STREAM_LABEL_FORMAT + "): "
+                    + streamArn, e);
+        }
+    }
+
+    /**
      * Return the stream type for the given table stored in the SCHEMA_VERSION column of the ptable.
      */
     public static String getStreamType(Connection conn, String tableName) throws SQLException {
@@ -186,11 +312,28 @@ public class DdbAdapterCdcUtils {
     }
 
     /**
-     * Build a sequence number of the form <timestamp><offset>.
-     * offset should be 0-padded for OFFSET_LENGTH
+     * Build a 21-digit zero-padded sequence number (SequenceNumber min length 21,
+     * max 40). The numeric value is identical to the form
+     * (timestamp * 10^OFFSET_LENGTH + offset)
      */
     public static String getSequenceNumber(long timestamp, int offset) {
-        return timestamp + String.format("%0" + OFFSET_LENGTH + "d", offset);
+        return String.format("%021d", timestamp * MAX_NUM_CHANGES_AT_TIMESTAMP + offset);
+    }
+
+    public static long parseSequenceNumber(String s) {
+        if (s == null || s.isEmpty()) {
+            throw new IllegalArgumentException("SequenceNumber is required");
+        }
+        long val;
+        try {
+            val = Long.parseLong(s);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("SequenceNumber is not numeric: " + s, e);
+        }
+        if (val < 0) {
+            throw new IllegalArgumentException("SequenceNumber must be non-negative: " + s);
+        }
+        return val;
     }
 
     /**
@@ -199,12 +342,13 @@ public class DdbAdapterCdcUtils {
      *
      * @param tableName the table name from the shard iterator
      * @param partitionId the partition (shard) ID
-     * @param sequenceNumber the per-event sequence number
+     * @param sequenceNumber the per-event sequence number (any padded length)
      * @return 32-char lowercase hex string
      */
     public static String getEventId(String tableName, String partitionId, String sequenceNumber) {
+        long canonicalSeq = parseSequenceNumber(sequenceNumber);
         try {
-            String input = tableName + "|" + partitionId + "|" + sequenceNumber;
+            String input = tableName + "|" + partitionId + "|" + canonicalSeq;
             MessageDigest md = MessageDigest.getInstance("MD5");
             byte[] digest = md.digest(input.getBytes(StandardCharsets.UTF_8));
             return String.format("%032x", new BigInteger(1, digest));

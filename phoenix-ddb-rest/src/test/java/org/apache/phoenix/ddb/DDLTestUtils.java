@@ -267,7 +267,9 @@ public class DDLTestUtils {
                                          String streamType)
             throws SQLException, ParseException {
         String tableName = td.tableName();
-        Assert.assertTrue(td.latestStreamArn().startsWith("phoenix/cdc/stream/"));
+        Assert.assertTrue(td.latestStreamArn().startsWith(
+                "arn:aws:dynamodb:us-west-2:000000000000:table/"));
+        Assert.assertTrue(td.latestStreamArn().contains("/stream/"));
         Assert.assertTrue(td.latestStreamArn().contains(tableName));
 
         PTable dataTable = pconn.getTable(PhoenixUtils.getFullTableName(tableName, false));
@@ -285,7 +287,7 @@ public class DDLTestUtils {
         df.setTimeZone(TimeZone.getTimeZone("UTC"));
         Date date = df.parse(td.latestStreamLabel());
         Assert.assertEquals(String.valueOf(cdcIndex.getTimeStamp()), String.valueOf(date.getTime()));
-        Assert.assertTrue(td.latestStreamArn().contains(String.valueOf(cdcIndex.getTimeStamp())));
+        Assert.assertTrue(td.latestStreamArn().endsWith("/stream/" + td.latestStreamLabel()));
     }
 
     private static CreateTableRequest.Builder addGlobalIndexToRequest(CreateTableRequest.Builder request, String indexName,

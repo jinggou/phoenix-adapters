@@ -217,7 +217,8 @@ public class TableDescriptorUtils {
         String streamName = DdbAdapterCdcUtils.getEnabledStreamName(pconn,
                 table.getName().getString());
         if (streamName != null && table.getSchemaVersion() != null) {
-            tableDescription.put(ApiMetadata.LATEST_STREAM_ARN, streamName);
+            tableDescription.put(ApiMetadata.LATEST_STREAM_ARN,
+                    DdbAdapterCdcUtils.toStreamArn(streamName));
             tableDescription.put(ApiMetadata.LATEST_STREAM_LABEL,
                     DdbAdapterCdcUtils.getStreamLabel(streamName));
 

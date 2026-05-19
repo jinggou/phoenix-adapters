@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 
 import org.apache.phoenix.ddb.ConnectionUtil;
 import org.apache.phoenix.ddb.service.exceptions.PhoenixServiceException;
+import org.apache.phoenix.ddb.service.exceptions.ValidationException;
 import org.apache.phoenix.ddb.utils.ApiMetadata;
 import org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils;
 import org.apache.phoenix.ddb.utils.PhoenixShardIterator;
@@ -57,8 +58,7 @@ public class GetRecordsService {
      * return null for nextShardIterator if there are more records to return.
      */
     public static Map<String, Object> getRecords(Map<String, Object> request, String connectionUrl) {
-        PhoenixShardIterator pIter
-                = new PhoenixShardIterator((String) request.get(ApiMetadata.SHARD_ITERATOR));
+        PhoenixShardIterator pIter = parseShardIterator(request);
         Integer requestLimit = (Integer) request.get(ApiMetadata.LIMIT);
         List<Map<String, Object>> records = new ArrayList<>();
         long lastTs = pIter.getTimestamp();
@@ -217,5 +217,16 @@ public class GetRecordsService {
         record.put(ApiMetadata.EVENT_SOURCE, ApiMetadata.EVENT_SOURCE_VALUE);
         record.put(ApiMetadata.AWS_REGION, ApiMetadata.AWS_REGION_VALUE);
         return record;
+    }
+
+    private static PhoenixShardIterator parseShardIterator(Map<String, Object> request) {
+        String shardIterator = (String) request.get(ApiMetadata.SHARD_ITERATOR);
+        try {
+            return new PhoenixShardIterator(shardIterator);
+        } catch (RuntimeException e) {
+            throw new ValidationException(
+                "Invalid ShardIterator: " + shardIterator + ", error message: " + (
+                    e.getMessage() == null ? "" : e.getMessage()));
+        }
     }
 }

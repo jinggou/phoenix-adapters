@@ -44,25 +44,26 @@ public class ListStreamsService {
             }
             if (!StringUtils.isEmpty(exclusiveStartStreamArn)) {
                 query.append(" AND STREAM_NAME > '")
-                     .append(exclusiveStartStreamArn)
+                     .append(DdbAdapterCdcUtils.normalizeStreamName(exclusiveStartStreamArn))
                      .append("'");
             }
             int limit = (int) request.getOrDefault(ApiMetadata.LIMIT, MAX_LIMIT);
             query.append(" LIMIT ").append(limit);
             ResultSet rs = connection.createStatement().executeQuery(query.toString());
-            String lastStreamArn = null;
+            String lastStreamName = null;
             while (rs.next()) {
                 String tableName = rs.getString(1);
                 String streamName = rs.getString(2);
                 Map<String, Object> stream = new HashMap<>();
                 stream.put(ApiMetadata.TABLE_NAME, PhoenixUtils.getTableNameFromFullName(tableName, false));
-                stream.put(ApiMetadata.STREAM_ARN, streamName);
+                stream.put(ApiMetadata.STREAM_ARN, DdbAdapterCdcUtils.toStreamArn(streamName));
                 stream.put(ApiMetadata.STREAM_LABEL, DdbAdapterCdcUtils.getStreamLabel(streamName));
                 streams.add(stream);
-                lastStreamArn = streamName;
+                lastStreamName = streamName;
             }
             result.put(ApiMetadata.STREAMS, streams);
-            result.put(ApiMetadata.LAST_EVALUATED_STREAM_ARN, lastStreamArn);
+            result.put(ApiMetadata.LAST_EVALUATED_STREAM_ARN,
+                    lastStreamName == null ? null : DdbAdapterCdcUtils.toStreamArn(lastStreamName));
         } catch (SQLException e) {
             throw new PhoenixServiceException(e);
         }

@@ -5,6 +5,7 @@ import org.apache.phoenix.ddb.service.exceptions.PhoenixServiceException;
 import org.apache.phoenix.ddb.service.exceptions.ValidationException;
 import org.apache.phoenix.ddb.utils.ApiMetadata;
 import org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils;
+import org.apache.phoenix.ddb.utils.PhoenixShardIterator;
 import org.apache.phoenix.util.EnvironmentEdgeManager;
 
 import java.sql.Connection;
@@ -12,26 +13,28 @@ import java.sql.SQLException;
 import java.util.HashMap;
 import java.util.Map;
 
-import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.MAX_NUM_CHANGES_AT_TIMESTAMP;
-import static org.apache.phoenix.ddb.utils.DdbAdapterCdcUtils.SHARD_ITERATOR_FORMAT;
-
 public class GetShardIteratorService {
 
     public static Map<String, Object> getShardIterator(Map<String, Object> request,
                                                        String connectionUrl) {
         Map<String, Object> result = new HashMap<>();
         try (Connection conn = ConnectionUtil.getConnection(connectionUrl)) {
-            String streamArn = (String) request.get(ApiMetadata.STREAM_ARN);
-            String shardId = (String) request.get(ApiMetadata.SHARD_ID);
+            String streamArnInput = (String) request.get(ApiMetadata.STREAM_ARN);
+            String streamName = DdbAdapterCdcUtils.normalizeStreamName(streamArnInput);
+            String partitionId = DdbAdapterCdcUtils.partitionIdFromShardId(
+                (String) request.get(ApiMetadata.SHARD_ID));
             String seqNum = (String) request.get(ApiMetadata.SEQUENCE_NUMBER);
             String shardIterType = (String) request.get(ApiMetadata.SHARD_ITERATOR_TYPE);
-            String tableName = DdbAdapterCdcUtils.getTableNameFromStreamName(streamArn);
-            String cdcObj = DdbAdapterCdcUtils.getCDCObjectNameFromStreamName(streamArn);
-            String startSeqNum = getStartingSequenceNumber(conn, tableName, streamArn, shardId,
-                    seqNum, shardIterType);
+            String tableName = DdbAdapterCdcUtils.getTableNameFromStreamName(streamName);
+            String startSeqNum =
+                getStartingSequenceNumber(conn, tableName, streamName, partitionId, seqNum,
+                    shardIterType);
             String streamType = DdbAdapterCdcUtils.getStreamType(conn, tableName);
-            result.put(ApiMetadata.SHARD_ITERATOR, String.format(SHARD_ITERATOR_FORMAT, tableName,
-                    cdcObj, streamType, shardId, startSeqNum));
+            String streamArn = DdbAdapterCdcUtils.isStreamArn(streamArnInput)
+                ? streamArnInput : DdbAdapterCdcUtils.toStreamArn(streamName);
+            PhoenixShardIterator pIter = new PhoenixShardIterator(streamArn, streamName,
+                streamType, partitionId, startSeqNum);
+            result.put(ApiMetadata.SHARD_ITERATOR, pIter.toString());
         } catch (SQLException e) {
             throw new PhoenixServiceException(e);
         }
@@ -39,27 +42,30 @@ public class GetShardIteratorService {
     }
 
     private static String getStartingSequenceNumber(Connection conn, String tableName,
-                                                    String streamName, String shardId,
+                                                    String streamName, String partitionId,
                                                     String seqNum, String type)
             throws SQLException {
-        String startSeqNum = null;
+        String startSeqNum;
         switch (type) {
             case "AT_SEQUENCE_NUMBER" :
-                startSeqNum = seqNum;
+                startSeqNum =
+                    String.format("%021d", DdbAdapterCdcUtils.parseSequenceNumber(seqNum));
                 break;
             case "AFTER_SEQUENCE_NUMBER":
-                startSeqNum = String.valueOf(Long.parseLong(seqNum) + 1);
+                startSeqNum =
+                    String.format("%021d", DdbAdapterCdcUtils.parseSequenceNumber(seqNum) + 1);
                 break;
             case "LATEST":
                 // new records only i.e. use current time.
-                startSeqNum = String.valueOf(EnvironmentEdgeManager.currentTimeMillis()
-                        * MAX_NUM_CHANGES_AT_TIMESTAMP);
+                startSeqNum =
+                    DdbAdapterCdcUtils.getSequenceNumber(EnvironmentEdgeManager.currentTimeMillis(),
+                        0);
                 break;
             case "TRIM_HORIZON":
                 // Oldest available sequence number in the shard, we will use shard's start sequence number
                 long partitionStartTime = DdbAdapterCdcUtils.getPartitionStartTime(
-                        conn, tableName, streamName, shardId);
-                startSeqNum = String.valueOf(partitionStartTime * MAX_NUM_CHANGES_AT_TIMESTAMP);
+                        conn, tableName, streamName, partitionId);
+                startSeqNum = DdbAdapterCdcUtils.getSequenceNumber(partitionStartTime, 0);
                 break;
         default:
                 throw new ValidationException("Invalid shard iterator type: " + type);

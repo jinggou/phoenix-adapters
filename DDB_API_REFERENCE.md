@@ -583,8 +583,8 @@ Returns the full description of a table including its schema, indexes, stream co
       "StreamEnabled": true,
       "StreamViewType": "NEW_AND_OLD_IMAGES"
     },
-    "LatestStreamArn": "phoenix/cdc/stream/...",
-    "LatestStreamLabel": "2024-01-15T10:30:00Z"
+    "LatestStreamArn": "arn:aws:dynamodb:us-west-2:000000000000:table/MyTable/stream/2024-01-15T10:30:00.000",
+    "LatestStreamLabel": "2024-01-15T10:30:00.000"
   }
 }
 ```
@@ -1406,15 +1406,21 @@ Returns a list of all streams, optionally filtered by table name.
   "Streams": [
     {
       "TableName": "MyTable",
-      "StreamArn": "phoenix/cdc/stream/MyTable/...",
-      "StreamLabel": "2024-01-15T10:30:00Z"
+      "StreamArn": "arn:aws:dynamodb:us-west-2:000000000000:table/MyTable/stream/2024-01-15T10:30:00.000",
+      "StreamLabel": "2024-01-15T10:30:00.000"
     }
   ],
-  "LastEvaluatedStreamArn": "phoenix/cdc/stream/MyTable/..."
+  "LastEvaluatedStreamArn": "arn:aws:dynamodb:us-west-2:000000000000:table/MyTable/stream/2024-01-15T10:30:00.000"
 }
 ```
 
 `LastEvaluatedStreamArn` is present only when the result count equals the limit.
+
+The emitted `StreamArn` is an AWS-shaped synthetic ARN. Region (`us-west-2`) and account
+(`000000000000`) are fixed sentinels because phoenix-adapters can run anywhere; the label
+segment is the UTC ISO timestamp matching AWS DynamoDB Streams' StreamLabel format.
+For backward compatibility, every endpoint that accepts a stream identifier also accepts
+the legacy bare internal name `phoenix/cdc/stream/{table}/CDC_{table}/{ts}/{creationDt}`.
 
 ---
 
@@ -1437,9 +1443,9 @@ Returns detailed information about a stream including its shards.
 ```json
 {
   "StreamDescription": {
-    "StreamArn": "phoenix/cdc/stream/MyTable/...",
+    "StreamArn": "arn:aws:dynamodb:us-west-2:000000000000:table/MyTable/stream/2024-01-15T10:30:00.000",
     "TableName": "MyTable",
-    "StreamLabel": "2024-01-15T10:30:00Z",
+    "StreamLabel": "2024-01-15T10:30:00.000",
     "StreamViewType": "NEW_AND_OLD_IMAGES",
     "CreationRequestDateTime": 1700000000.000,
     "KeySchema": [
@@ -1448,15 +1454,15 @@ Returns detailed information about a stream including its shards.
     "StreamStatus": "ENABLED",
     "Shards": [
       {
-        "ShardId": "partition-1",
-        "ParentShardId": "parent-partition-0",
+        "ShardId": "shardId-1700000099999-1a2b3c4d5e6f7890abcdef0123456789",
+        "ParentShardId": "shardId-1700000000000-a1b2c3d4e5f60718293a4b5c6d7e8f90",
         "SequenceNumberRange": {
-          "StartingSequenceNumber": "170000000000000",
-          "EndingSequenceNumber": "170100000099999"
+          "StartingSequenceNumber": "000170000009999900000",
+          "EndingSequenceNumber": "000170000010000099999"
         }
       }
     ],
-    "LastEvaluatedShardId": "partition-1"
+    "LastEvaluatedShardId": "shardId-1700000099999-1a2b3c4d5e6f7890abcdef0123456789"
   }
 }
 ```
@@ -1464,6 +1470,8 @@ Returns detailed information about a stream including its shards.
 - Shards are only listed when `StreamStatus` is `ENABLED`
 - `EndingSequenceNumber` is only present for closed shards (after a split)
 - `LastEvaluatedShardId` is present only when shard count equals the limit
+- `ShardId` and `ParentShardId` follow the AWS-shape `shardId-<partitionStartMs>-<32-char-hex>` format (length 49-54, within the AWS spec [28, 65]). `ParentShardId` is omitted when the parent partition has been TTL-pruned from `SYSTEM.CDC_STREAM`.
+- `StartingSequenceNumber` and `EndingSequenceNumber` are 21-digit zero-padded numeric strings (matching the AWS spec minimum length of 21). `BigInteger`/`Long.parseLong` both ignore leading zeros so numeric ordering vs. unpadded values is preserved.
 
 ---
 
@@ -1495,11 +1503,18 @@ Gets a shard iterator for reading records from a specific position in a shard.
 
 ```json
 {
-  "ShardIterator": "shardIterator/tableName/cdcObject/streamType/shardId/12345"
+  "ShardIterator": "arn:aws:dynamodb:us-west-2:000000000000:table/myTable/stream/2024-01-15T10:30:00.000|1|eyJzdHJlYW1UeXBlIjoiTkVXX0lNQUdFIiwicGFydGl0aW9uSWQiOiIxYTJiM2M0ZDVlNmY3ODkwYWJjZGVmMDEyMzQ1Njc4OSIsInNlcU51bSI6IjAwMDE3MDAwMDAwMDAwMDAwMDAwMDAwIn0"
 }
 ```
 
-The shard iterator is an encoded string containing: table name, CDC object name, stream type, shard ID, and starting sequence number.
+The shard iterator follows the DynamoDB Streams wire format
+`<streamArn>|<version>|<base64(JSON state)>`:
+- `<streamArn>` carries the table identity (table name + creation-time stream label).
+- `<version>` is the literal `"1"`; reserved for future inner-format evolution.
+- `<base64(JSON state)>` is a base64-encoded JSON object carrying the per-iterator
+  resume state: `{"streamType":"...","partitionId":"<32-hex>","seqNum":"<21-digit>"}`.
+
+Treat the value as opaque; clients pass it unchanged to subsequent `GetRecords` calls.
 
 ---
 
@@ -1525,7 +1540,7 @@ Reads change records from a shard using a shard iterator.
       "eventName": "INSERT",
       "dynamodb": {
         "StreamViewType": "NEW_AND_OLD_IMAGES",
-        "SequenceNumber": "170000000000001",
+        "SequenceNumber": "000170000000012300000",
         "ApproximateCreationDateTime": 1700000000.123,
         "Keys": {
           "id": {"S": "user-123"}
@@ -1542,7 +1557,7 @@ Reads change records from a shard using a shard iterator.
       "eventName": "MODIFY",
       "dynamodb": {
         "StreamViewType": "NEW_AND_OLD_IMAGES",
-        "SequenceNumber": "170000000000002",
+        "SequenceNumber": "000170000000145600000",
         "ApproximateCreationDateTime": 1700000001.456,
         "Keys": {"id": {"S": "user-123"}},
         "OldImage": {"id": {"S": "user-123"}, "name": {"S": "John Doe"}, "age": {"N": "30"}},
@@ -1554,7 +1569,7 @@ Reads change records from a shard using a shard iterator.
       "eventName": "REMOVE",
       "dynamodb": {
         "StreamViewType": "NEW_AND_OLD_IMAGES",
-        "SequenceNumber": "170000000000003",
+        "SequenceNumber": "000170000000278900000",
         "ApproximateCreationDateTime": 1700000002.789,
         "Keys": {"id": {"S": "user-456"}},
         "OldImage": {"id": {"S": "user-456"}, "name": {"S": "Jane"}},
@@ -1566,7 +1581,7 @@ Reads change records from a shard using a shard iterator.
       }
     }
   ],
-  "NextShardIterator": "shardIterator/tableName/cdcObject/streamType/shardId/170000000000004"
+  "NextShardIterator": "arn:aws:dynamodb:us-west-2:000000000000:table/myTable/stream/2024-01-15T10:30:00.000|1|eyJzdHJlYW1UeXBlIjoiTkVXX0lNQUdFIiwicGFydGl0aW9uSWQiOiIxYTJiM2M0ZDVlNmY3ODkwYWJjZGVmMDEyMzQ1Njc4OSIsInNlcU51bSI6IjAwMDE3MDAwMDAwMDAwMDAwMDA0In0"
 }
 ```
 
