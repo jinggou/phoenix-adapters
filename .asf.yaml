@@ -32,6 +32,8 @@ github:
     - hbase
     - rest
     - dynamodb
+    - aws
+    - http
   features:
     wiki: false
     issues: false
