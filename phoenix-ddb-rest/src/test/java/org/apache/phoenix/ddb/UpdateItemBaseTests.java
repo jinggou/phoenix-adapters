@@ -211,6 +211,43 @@ public class UpdateItemBaseTests {
     }
 
     /**
+     * SET a literal string value that contains " - " and " + ". Such literals must be stored
+     * verbatim and must never be interpreted as arithmetic. Regression for a production UpdateItem
+     * failure where a JSON "properties" string contained " - " and Phoenix threw
+     * "Operand ... does not exist".
+     */
+    @Test(timeout = 120000)
+    public void testSetLiteralStringWithArithmeticOperators() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, true);
+
+        Map<String, AttributeValue> key = getKey();
+        UpdateItemRequest.Builder uir = UpdateItemRequest.builder().tableName(tableName).key(key);
+        uir.updateExpression("SET #props = :props, #eq = :eq, #co = :co");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#props", "Properties");
+        exprAttrNames.put("#eq", "Equation");
+        exprAttrNames.put("#co", "Company");
+        uir.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        // Literal JSON string containing " - ".
+        exprAttrVal.put(":props", AttributeValue.builder()
+                .s("{\"teamName\":\"Foo - Bar Baz Service\",\"channelName\":\"#foo-notifications\"}")
+                .build());
+        // Literal string containing " + ".
+        exprAttrVal.put(":eq", AttributeValue.builder().s("E = mc^2 + offset").build());
+        // Plain literal that looks like a subtraction of two field names.
+        exprAttrVal.put(":co", AttributeValue.builder().s("Acme - Widgets").build());
+        uir.expressionAttributeValues(exprAttrVal);
+        uir.returnValues(ALL_NEW);
+        UpdateItemResponse dynamoResult = dynamoDbClient.updateItem(uir.build());
+        UpdateItemResponse phoenixResult = phoenixDBClientV2.updateItem(uir.build());
+        Assert.assertEquals(dynamoResult.attributes(), phoenixResult.attributes());
+
+        validateItem(tableName, key);
+    }
+
+    /**
      * SET: list_append against an existing list attribute path, plus a parallel
      * "create-or-append" using if_not_exists for a previously-missing list, plus a
      * subsequent re-apply that exercises both the existing-path operand and a literal
@@ -976,6 +1013,38 @@ public class UpdateItemBaseTests {
         attributeUpdates.put("COL2", AttributeValueUpdate.builder()
                 // No action specified - should default to PUT
                 .value(AttributeValue.builder().s("OverwrittenTitle").build()).build());
+
+        UpdateItemRequest updateRequest = UpdateItemRequest.builder().tableName(tableName).key(key)
+                .attributeUpdates(attributeUpdates).build();
+
+        dynamoDbClient.updateItem(updateRequest);
+        phoenixDBClientV2.updateItem(updateRequest);
+
+        validateItem(tableName, key);
+    }
+
+    /**
+     * Legacy AttributeUpdates PUT of literal string values that contain " - " and " + ". Same
+     * regression as {@link #testSetLiteralStringWithArithmeticOperators()}, exercised through the
+     * legacy AttributeUpdates parameter path. Literals must be stored verbatim and never parsed as
+     * arithmetic.
+     */
+    @Test(timeout = 120000)
+    public void testAttributeUpdatesLiteralStringWithArithmeticOperators() {
+        final String tableName = testName.getMethodName().replaceAll("[\\[\\]]", "");
+        createTableAndPutItem(tableName, true);
+
+        Map<String, AttributeValue> key = getKey();
+
+        Map<String, AttributeValueUpdate> attributeUpdates = new HashMap<>();
+        // PUT a literal JSON string containing " - ".
+        attributeUpdates.put("Properties", AttributeValueUpdate.builder().action(AttributeAction.PUT)
+                .value(AttributeValue.builder()
+                        .s("{\"teamName\":\"Foo - Bar Baz Service\",\"channelName\":\"#foo-notifications\"}")
+                        .build()).build());
+        // PUT a literal string containing " + ".
+        attributeUpdates.put("Language", AttributeValueUpdate.builder().action(AttributeAction.PUT)
+                .value(AttributeValue.builder().s("C++ - systems programming").build()).build());
 
         UpdateItemRequest updateRequest = UpdateItemRequest.builder().tableName(tableName).key(key)
                 .attributeUpdates(attributeUpdates).build();
