@@ -184,46 +184,24 @@ public class QueryService {
                 (Map<String, Object>) request.get(ApiMetadata.EXPRESSION_ATTRIBUTE_VALUES);
 
         // Bind partition key value
-        String partitionValuePlaceholder = keyConditions.getPartitionValue();
-        if (!exprAttrVals.containsKey(partitionValuePlaceholder)) {
-            throw new ValidationException(String.format(
-                    "ExpressionAttributeValues missing required placeholder '%s' for partition key",
-                    partitionValuePlaceholder));
-        }
-        Map<String, Object> partitionAttrVal =
-                (Map<String, Object>) exprAttrVals.get(partitionValuePlaceholder);
+        Map<String, Object> partitionAttrVal = ValidationUtil.requireExpressionAttributeValue(
+                exprAttrVals, keyConditions.getPartitionValue(), "KeyConditionExpression");
         DQLUtils.setKeyValueOnStatement(stmt, index++, partitionAttrVal, false);
 
         // Bind sort key values from key condition expression
         if (keyConditions.hasSortKey()) {
             if (keyConditions.hasBeginsWith()) {
-                String beginsWithPlaceholder = keyConditions.getBeginsWithSortKeyVal();
-                if (!exprAttrVals.containsKey(beginsWithPlaceholder)) {
-                    throw new ValidationException(String.format(
-                            "ExpressionAttributeValues missing required placeholder '%s' for sort key begins_with condition",
-                            beginsWithPlaceholder));
-                }
-                Map<String, Object> sortAttrVal = (Map<String, Object>) exprAttrVals.get(beginsWithPlaceholder);
+                Map<String, Object> sortAttrVal = ValidationUtil.requireExpressionAttributeValue(
+                        exprAttrVals, keyConditions.getBeginsWithSortKeyVal(), "KeyConditionExpression");
                 DQLUtils.setKeyValueOnStatement(stmt, index++, sortAttrVal, true);
                 index++; // we set 2 parameters for SUBSTR/SUBBINARY
             } else {
-                String sortValue1Placeholder = keyConditions.getSortKeyValue1();
-                if (!exprAttrVals.containsKey(sortValue1Placeholder)) {
-                    throw new ValidationException(String.format(
-                            "ExpressionAttributeValues missing required placeholder '%s' for sort key condition",
-                            sortValue1Placeholder));
-                }
-                Map<String, Object> sortAttrVal1 =
-                        (Map<String, Object>) exprAttrVals.get(sortValue1Placeholder);
+                Map<String, Object> sortAttrVal1 = ValidationUtil.requireExpressionAttributeValue(
+                        exprAttrVals, keyConditions.getSortKeyValue1(), "KeyConditionExpression");
                 DQLUtils.setKeyValueOnStatement(stmt, index++, sortAttrVal1, false);
                 if (keyConditions.hasBetween()) {
-                    String sortValue2Placeholder = keyConditions.getSortKeyValue2();
-                    if (!exprAttrVals.containsKey(sortValue2Placeholder)) {
-                        throw new ValidationException(String.format(
-                                "ExpressionAttributeValues missing required placeholder '%s' for sort key BETWEEN condition",
-                                sortValue2Placeholder));
-                    }
-                    Map<String, Object> sortAttrVal2 = (Map<String, Object>) exprAttrVals.get(sortValue2Placeholder);
+                    Map<String, Object> sortAttrVal2 = ValidationUtil.requireExpressionAttributeValue(
+                            exprAttrVals, keyConditions.getSortKeyValue2(), "KeyConditionExpression");
                     DQLUtils.setKeyValueOnStatement(stmt, index++, sortAttrVal2, false);
                 }
             }
