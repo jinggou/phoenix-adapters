@@ -189,7 +189,7 @@ public class DQLUtils {
             Map<String, Object> attrVal, boolean isBeginsWith) throws SQLException {
         if (attrVal == null) {
             throw new ValidationException(
-                    "Value provided in ExpressionAttributeValues is misssing or invalid");
+                    "Value provided in ExpressionAttributeValues is missing or invalid");
         }
         if (attrVal.containsKey("N")) {
             stmt.setDouble(index, Double.parseDouble((String) attrVal.get("N")));
