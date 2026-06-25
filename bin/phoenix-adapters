@@ -287,12 +287,18 @@ if [ -z "${PHOENIX_REST_OPTS}" ] ; then
     PHOENIX_REST_OPTS="-XX:+UseG1GC"
     PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:+HeapDumpOnOutOfMemoryError"
     PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:HeapDumpPath=$PHOENIX_ADAPTERS_LOG_DIR"
-    PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:+UseGCLogFileRotation"
-    PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:NumberOfGCLogFiles=5"
-    PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:GCLogFileSize=20M"
-    PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:+PrintGCDetails"
-    PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:+PrintGCDateStamps"
-    PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -Xloggc:$PHOENIX_ADAPTERS_LOG_DIR/gc.log"
+    # GC logging + JPMS flags differ by JDK: JDK 9+ removed the legacy GC-logging flags
+    # (UseGCLogFileRotation/NumberOfGCLogFiles/GCLogFileSize/PrintGCDetails/PrintGCDateStamps/
+    # Xloggc) and needs unified -Xlog plus --add-opens/--add-exports, while JDK 8 rejects both
+    # -Xlog and the JPMS flags. Gate on the running JDK major (same mechanism as Hadoop's
+    # hadoop-env.sh) so the launcher works on both JDK 8 (e.g. AWS) and JDK 17 (e.g. GCP).
+    JDK_MAJOR="${JDK_MAJOR:-$("$JAVA" -version 2>&1 | awk -F'"' '/version/{print $2}' | cut -d. -f1)}"
+    if [ "${JDK_MAJOR:-8}" -ge 9 ]; then
+        PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -Xlog:gc*:file=$PHOENIX_ADAPTERS_LOG_DIR/gc.log:time,uptime,level,tags:filecount=5,filesize=20M"
+        PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-exports=java.base/sun.security.action=ALL-UNNAMED --add-exports=java.naming/com.sun.jndi.ldap=ALL-UNNAMED"
+    else
+        PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -XX:+UseGCLogFileRotation -XX:NumberOfGCLogFiles=5 -XX:GCLogFileSize=20M -XX:+PrintGCDetails -XX:+PrintGCDateStamps -Xloggc:$PHOENIX_ADAPTERS_LOG_DIR/gc.log"
+    fi
     PHOENIX_REST_OPTS="$PHOENIX_REST_OPTS -Dphoenix.adapters.log.dir=$PHOENIX_ADAPTERS_LOG_DIR"
     export PHOENIX_REST_OPTS
 fi
