@@ -44,7 +44,6 @@
     <compileSource>1.8</compileSource>
     <maven.compiler.source>${compileSource}</maven.compiler.source>
     <maven.compiler.target>${compileSource}</maven.compiler.target>
-    <java.version>1.8</java.version>
     <aws.sdk.version>2.30.22</aws.sdk.version>
     <phoenix.version>5.3.1</phoenix.version>
     <junit.version>4.13.1</junit.version>
@@ -65,8 +64,9 @@
 
     <!-- JVM version dependent JVM options for running tests. Keep mostly in sync with HBase/Phoenix -->
     <surefire.Xmx>2200m</surefire.Xmx>
+    <surefire.Xms>1000m</surefire.Xms>
 
-    <phoenix-surefire.argLine>-enableassertions -Xmx${surefire.Xmx}
+    <phoenix-surefire.argLine>-enableassertions -Xmx${surefire.Xmx} -Xms${surefire.Xms}
       -Djava.security.egd=file:/dev/./urandom -Djava.net.preferIPv4Stack=true
       -Djava.awt.headless=true -Djdk.net.URLClassPath.disableClassPathURLCheck=true
       -Dorg.apache.hbase.thirdparty.io.netty.leakDetection.level=advanced
@@ -90,15 +90,15 @@
       --add-opens java.base/java.util.concurrent=ALL-UNNAMED
       --add-exports java.base/jdk.internal.misc=ALL-UNNAMED
       --add-exports java.security.jgss/sun.security.krb5=ALL-UNNAMED</phoenix-surefire.jdk11.flags>
-    <phoenix-surefire.jdk11.tuning.flags>
-        ${phoenix-surefire.jdk8.tuning.flags}
-    </phoenix-surefire.jdk11.tuning.flags>
+    <phoenix-surefire.jdk11.tuning.flags/>
     <phoenix-surefire.jdk17.flags>--add-opens java.base/jdk.internal.util.random=ALL-UNNAMED</phoenix-surefire.jdk17.flags>
     <phoenix-surefire.jdk17.tuning.flags></phoenix-surefire.jdk17.tuning.flags>
+    <!-- Needed for SystemExitRule compatibility (not currently used) -->
+    <phoenix-surefire.jdk21.flags>-Djava.security.manager=allow</phoenix-surefire.jdk21.flags>
     <!-- Surefire argLine defaults for Linux + JDK8 -->
     <argLine>${phoenix-surefire.argLine} ${phoenix-surefire.jdk8.tuning.flags} @{jacocoArgLine}</argLine>
     <!-- Empty argument when code coverage is deactivated -->
-    <jacocoArgLine></jacocoArgLine>
+    <jacocoArgLine/>
   </properties>
 
   <build>
@@ -170,6 +170,9 @@
                 <goals>
                   <goal>prepare-agent</goal>
                 </goals>
+                <configuration>
+                  <propertyName>jacocoArgLine</propertyName>
+                </configuration>
               </execution>
             </executions>
           </plugin>
@@ -182,7 +185,7 @@
         <jdk>[1.8,11)</jdk>
       </activation>
     </profile>
-    <!-- See PHOENIX-7901 when building with Java9+ -->
+    <!-- See PHOENIX-7901 for Java 11+ support -->
     <profile>
       <id>build-with-jdk11</id>
       <activation>
@@ -198,11 +201,25 @@
     <profile>
       <id>build-with-jdk17</id>
       <activation>
-        <jdk>[17,)</jdk>
+        <jdk>[17,21)</jdk>
       </activation>
       <properties>
         <argLine>${phoenix-surefire.jdk11.flags}
           ${phoenix-surefire.jdk17.flags}
+          ${phoenix-surefire.jdk17.tuning.flags}
+          ${phoenix-surefire.argLine}
+          @{jacocoArgLine}</argLine>
+      </properties>
+    </profile>
+    <profile>
+      <id>build-with-jdk21</id>
+      <activation>
+        <jdk>[21,)</jdk>
+      </activation>
+      <properties>
+        <argLine>${phoenix-surefire.jdk11.flags}
+          ${phoenix-surefire.jdk17.flags}
+          ${phoenix-surefire.jdk21.flags}
           ${phoenix-surefire.jdk17.tuning.flags}
           ${phoenix-surefire.argLine}
           @{jacocoArgLine}</argLine>
