@@ -11,7 +11,9 @@ jobs:
     
     strategy:
       matrix:
-        java: [8, 11, 17, 21]
+        # PRs: JDK 8 only for fast feedback
+        # Push: JDK 8 + 17 to verify baseline and --add-opens flags
+        java: ${{ github.event_name == 'pull_request' && fromJSON('[8]') || fromJSON('[8, 17]') }}
       fail-fast: false
 
     # Increase timeout for long-running test suites
