@@ -622,6 +622,113 @@ public class QueryIT {
     }
 
     @Test(timeout = 120000)
+    public void testQuerySingleHashKeyCount() throws Exception {
+        final String tableName = testName.getMethodName();
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "attr_0",
+                        ScalarAttributeType.S, null, null);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        PutItemRequest putItemRequest1 = PutItemRequest.builder().tableName(tableName)
+                .item(getItem1()).build();
+        phoenixDBClientV2.putItem(putItemRequest1);
+        dynamoDbClient.putItem(putItemRequest1);
+
+        QueryRequest.Builder qr = QueryRequest.builder().tableName(tableName);
+        qr.keyConditionExpression("#0 = :v0");
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#0", "attr_0");
+        qr.expressionAttributeNames(exprAttrNames);
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":v0", AttributeValue.builder().s("A").build());
+        qr.expressionAttributeValues(exprAttrVal);
+        qr.select("COUNT");
+
+        QueryResponse phoenixResult = phoenixDBClientV2.query(qr.build());
+        QueryResponse dynamoResult = dynamoDbClient.query(qr.build());
+        Assert.assertEquals(dynamoResult.count(), phoenixResult.count());
+        Assert.assertEquals(1, phoenixResult.count().intValue());
+        Assert.assertTrue(phoenixResult.items().isEmpty());
+        Assert.assertTrue(dynamoResult.items().isEmpty());
+        Assert.assertEquals(dynamoResult.scannedCount(), phoenixResult.scannedCount());
+        // Single-row-expected path must not emit a cursor.
+        Assert.assertTrue(phoenixResult.lastEvaluatedKey().isEmpty());
+        Assert.assertEquals(dynamoResult.lastEvaluatedKey(), phoenixResult.lastEvaluatedKey());
+    }
+
+    @Test(timeout = 240000)
+    public void testQueryNTypedPKBoundaryParity() throws Exception {
+        // Stress-test N-typed PK cursor format across byte/short/int/long boundaries
+        // (both signs), up to 2^53 (last exact integer representable as double), plus
+        // a sprinkle of non-integral decimals. Every page's lastEvaluatedKey must
+        // match the DynamoDB SDK's exactly,  the cursor-parity assertion catches
+        // any regression in the integer-detection branch of attributeValueFromColumn
+        // (N case), e.g. emitting "1.0" where DynamoDB emits "1".
+        final String tableName = testName.getMethodName();
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk", ScalarAttributeType.S,
+                        "sk", ScalarAttributeType.N);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        String[] testValues = {
+                "0",
+                "1", "-1", "2", "-2",
+                "127", "-127", "128", "-128", "129", "-129",     // byte boundary
+                "255", "-255", "256", "-256", "257", "-257",
+                "1024", "-1024", "1025", "-1025",
+                "32767", "-32767", "32768", "-32768",            // short boundary
+                "65535", "-65535",
+                "1000000", "-1000000",
+                "2147483647", "-2147483647",                     // int boundary
+                "2147483648", "-2147483648",
+                "9007199254740991", "-9007199254740991",         // just under 2^53
+                "9007199254740992", "-9007199254740992",         // 2^53 (last exact int)
+                // non-integral (BsonDouble-shaped on items path)
+                "0.5", "-0.5",
+                "1.5", "-1.5",
+                "126.5", "-126.5",
+                "256.34", "-256.34",
+                "258.9", "-258.9",
+                "1024.5", "-1024.5",
+                "1.234567890123", "-1.234567890123",
+        };
+
+        for (String v : testValues) {
+            Map<String, AttributeValue> item = new HashMap<>();
+            item.put("pk", AttributeValue.builder().s("A").build());
+            item.put("sk", AttributeValue.builder().n(v).build());
+            PutItemRequest putRequest =
+                    PutItemRequest.builder().tableName(tableName).item(item).build();
+            phoenixDBClientV2.putItem(putRequest);
+            dynamoDbClient.putItem(putRequest);
+        }
+
+        Map<String, String> exprAttrNames = new HashMap<>();
+        exprAttrNames.put("#0", "pk");
+        Map<String, AttributeValue> exprAttrVal = new HashMap<>();
+        exprAttrVal.put(":v0", AttributeValue.builder().s("A").build());
+
+        // Count path: exercises the new count-only inversion in DQLUtils.
+        QueryRequest.Builder countQr = QueryRequest.builder().tableName(tableName)
+                .keyConditionExpression("#0 = :v0")
+                .expressionAttributeNames(exprAttrNames)
+                .expressionAttributeValues(exprAttrVal)
+                .limit(1); // one page = one row + one cursor
+        TestUtils.compareQueryCountOutputsPerPage(countQr, phoenixDBClientV2, dynamoDbClient);
+
+        // Items path: exercises the BSON-doc inversion (getKeyFromDoc) across the
+        // same value set.
+        QueryRequest.Builder itemsQr = QueryRequest.builder().tableName(tableName)
+                .keyConditionExpression("#0 = :v0")
+                .expressionAttributeNames(exprAttrNames)
+                .expressionAttributeValues(exprAttrVal)
+                .limit(1);
+        TestUtils.compareQueryOutputsPerPage(itemsQr, phoenixDBClientV2, dynamoDbClient);
+    }
+
+    @Test(timeout = 120000)
     public void querySelectAllAttributesTest() throws Exception {
         //create table
         final String tableName = testName.getMethodName();
@@ -913,6 +1020,130 @@ public class QueryIT {
         } catch (DynamoDbException e) {
             Assert.assertEquals(400, e.statusCode());
             Assert.assertTrue(e.getMessage().contains("Invalid operator used in KeyConditionExpression:"));
+        }
+    }
+
+    // PHOENIX-7900: Test missing ExpressionAttributeValues
+    @Test(timeout = 120000)
+    public void testQueryWithMissingPartitionKeyValue() throws Exception {
+        final String tableName = testName.getMethodName();
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk",
+                        ScalarAttributeType.S, "sk", ScalarAttributeType.S);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", AttributeValue.builder().s("test-pk").build());
+        item.put("sk", AttributeValue.builder().s("test-sk").build());
+        phoenixDBClientV2.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
+
+        // Query with KeyConditionExpression that references :v0, but don't provide :v0
+        Map<String, AttributeValue> exprAttrVals = new HashMap<>();
+        // :v0 is missing!
+        QueryRequest queryRequest = QueryRequest.builder()
+                .tableName(tableName)
+                .keyConditionExpression("pk = :v0")
+                .expressionAttributeValues(exprAttrVals)
+                .build();
+
+        // Verify both DynamoDB and Phoenix return 400
+        try {
+            dynamoDbClient.query(queryRequest);
+            Assert.fail("Expected DynamoDbException for DynamoDB");
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+        }
+
+        try {
+            phoenixDBClientV2.query(queryRequest);
+            Assert.fail("Expected DynamoDbException for Phoenix");
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+            Assert.assertTrue(e.awsErrorDetails().errorCode().contains("ValidationException"));
+        }
+    }
+
+    @Test(timeout = 120000)
+    public void testQueryWithMissingSortKeyValue() throws Exception {
+        final String tableName = testName.getMethodName();
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk",
+                        ScalarAttributeType.S, "sk", ScalarAttributeType.N);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", AttributeValue.builder().s("test-pk").build());
+        item.put("sk", AttributeValue.builder().n("10").build());
+        phoenixDBClientV2.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
+
+        // Query with pk = :v0 AND sk < :v1, provide :v0 but not :v1
+        Map<String, AttributeValue> exprAttrVals = new HashMap<>();
+        exprAttrVals.put(":v0", AttributeValue.builder().s("test-pk").build());
+        // :v1 is missing!
+        QueryRequest queryRequest = QueryRequest.builder()
+                .tableName(tableName)
+                .keyConditionExpression("pk = :v0 AND sk < :v1")
+                .expressionAttributeValues(exprAttrVals)
+                .build();
+
+        // Verify both DynamoDB and Phoenix return 400
+        try {
+            dynamoDbClient.query(queryRequest);
+            Assert.fail("Expected DynamoDbException for DynamoDB");
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+        }
+
+        try {
+            phoenixDBClientV2.query(queryRequest);
+            Assert.fail("Expected DynamoDbException for Phoenix");
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+            Assert.assertTrue(e.awsErrorDetails().errorCode().contains("ValidationException"));
+        }
+    }
+
+    @Test(timeout = 120000)
+    public void testQueryWithMissingBetweenValue() throws Exception {
+        final String tableName = testName.getMethodName();
+        CreateTableRequest createTableRequest =
+                DDLTestUtils.getCreateTableRequest(tableName, "pk",
+                        ScalarAttributeType.S, "sk", ScalarAttributeType.N);
+        phoenixDBClientV2.createTable(createTableRequest);
+        dynamoDbClient.createTable(createTableRequest);
+
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("pk", AttributeValue.builder().s("test-pk").build());
+        item.put("sk", AttributeValue.builder().n("10").build());
+        phoenixDBClientV2.putItem(PutItemRequest.builder().tableName(tableName).item(item).build());
+
+        // Query with BETWEEN but missing second value
+        Map<String, AttributeValue> exprAttrVals = new HashMap<>();
+        exprAttrVals.put(":v0", AttributeValue.builder().s("test-pk").build());
+        exprAttrVals.put(":v1", AttributeValue.builder().n("5").build());
+        // :v2 is missing!
+        QueryRequest queryRequest = QueryRequest.builder()
+                .tableName(tableName)
+                .keyConditionExpression("pk = :v0 AND sk BETWEEN :v1 AND :v2")
+                .expressionAttributeValues(exprAttrVals)
+                .build();
+
+        // Verify both DynamoDB and Phoenix return 400
+        try {
+            dynamoDbClient.query(queryRequest);
+            Assert.fail("Expected DynamoDbException for DynamoDB");
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+        }
+
+        try {
+            phoenixDBClientV2.query(queryRequest);
+            Assert.fail("Expected DynamoDbException for Phoenix");
+        } catch (DynamoDbException e) {
+            Assert.assertEquals(400, e.statusCode());
+            Assert.assertTrue(e.awsErrorDetails().errorCode().contains("ValidationException"));
         }
     }
 
