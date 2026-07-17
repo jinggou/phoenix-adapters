@@ -41,7 +41,9 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <java.version>1.8</java.version>
+    <compileSource>1.8</compileSource>
+    <maven.compiler.source>${compileSource}</maven.compiler.source>
+    <maven.compiler.target>${compileSource}</maven.compiler.target>
     <aws.sdk.version>2.30.22</aws.sdk.version>
     <phoenix.version>5.3.2</phoenix.version>
     <junit.version>4.13.1</junit.version>
@@ -59,6 +61,44 @@
     <numForkedIT>1</numForkedIT>
     <surefire.version>3.0.0-M6</surefire.version>
     <antlr4.version>4.9.3</antlr4.version>
+
+    <!-- JVM version dependent JVM options for running tests. Keep mostly in sync with HBase/Phoenix -->
+    <surefire.Xmx>2200m</surefire.Xmx>
+    <surefire.Xms>1000m</surefire.Xms>
+
+    <phoenix-surefire.argLine>-enableassertions -Xmx${surefire.Xmx} -Xms${surefire.Xms}
+      -Djava.security.egd=file:/dev/./urandom -Djava.net.preferIPv4Stack=true
+      -Djava.awt.headless=true -Djdk.net.URLClassPath.disableClassPathURLCheck=true
+      -Dorg.apache.hbase.thirdparty.io.netty.leakDetection.level=advanced
+      -Dio.netty.eventLoopThreads=3 -Duser.timezone="America/Los_Angeles"
+      -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=./target/
+      "-Djava.library.path=${hadoop.library.path}${path.separator}${java.library.path}"
+    </phoenix-surefire.argLine>
+    <phoenix-surefire.jdk8.tuning.flags>
+        -XX:NewRatio=4 -XX:SurvivorRatio=8 -XX:+UseCompressedOops -XX:+UseConcMarkSweepGC
+        -XX:+DisableExplicitGC -XX:+UseCMSInitiatingOccupancyOnly -XX:+CMSClassUnloadingEnabled
+        -XX:+CMSScavengeBeforeRemark -XX:CMSInitiatingOccupancyFraction=68
+    </phoenix-surefire.jdk8.tuning.flags>
+    <phoenix-surefire.jdk11.flags>-Dorg.apache.hbase.thirdparty.io.netty.tryReflectionSetAccessible=true
+      --add-modules jdk.unsupported
+      --add-opens java.base/java.nio=ALL-UNNAMED
+      --add-opens java.base/sun.nio.ch=ALL-UNNAMED
+      --add-opens java.base/java.lang=ALL-UNNAMED
+      --add-opens java.base/jdk.internal.ref=ALL-UNNAMED
+      --add-opens java.base/java.lang.reflect=ALL-UNNAMED
+      --add-opens java.base/java.util=ALL-UNNAMED
+      --add-opens java.base/java.util.concurrent=ALL-UNNAMED
+      --add-exports java.base/jdk.internal.misc=ALL-UNNAMED
+      --add-exports java.security.jgss/sun.security.krb5=ALL-UNNAMED</phoenix-surefire.jdk11.flags>
+    <phoenix-surefire.jdk11.tuning.flags/>
+    <phoenix-surefire.jdk17.flags>--add-opens java.base/jdk.internal.util.random=ALL-UNNAMED</phoenix-surefire.jdk17.flags>
+    <phoenix-surefire.jdk17.tuning.flags></phoenix-surefire.jdk17.tuning.flags>
+    <!-- Needed for SystemExitRule compatibility (not currently used) -->
+    <phoenix-surefire.jdk21.flags>-Djava.security.manager=allow</phoenix-surefire.jdk21.flags>
+    <!-- Surefire argLine defaults for Linux + JDK8 -->
+    <argLine>${phoenix-surefire.argLine} ${phoenix-surefire.jdk8.tuning.flags} @{jacocoArgLine}</argLine>
+    <!-- Empty argument when code coverage is deactivated -->
+    <jacocoArgLine/>
   </properties>
 
   <build>
@@ -68,10 +108,6 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
           <version>3.8.1</version>
-          <configuration>
-            <source>${java.version}</source>
-            <target>${java.version}</target>
-          </configuration>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
@@ -134,11 +170,60 @@
                 <goals>
                   <goal>prepare-agent</goal>
                 </goals>
+                <configuration>
+                  <propertyName>jacocoArgLine</propertyName>
+                </configuration>
               </execution>
             </executions>
           </plugin>
         </plugins>
       </build>
+    </profile>
+    <profile>
+      <id>build-with-jdk8</id>
+      <activation>
+        <jdk>[1.8,11)</jdk>
+      </activation>
+    </profile>
+    <!-- See PHOENIX-7901 for Java 11+ support -->
+    <profile>
+      <id>build-with-jdk11</id>
+      <activation>
+        <jdk>[11,17)</jdk>
+      </activation>
+      <properties>
+        <argLine>${phoenix-surefire.jdk11.flags}
+          ${phoenix-surefire.jdk11.tuning.flags}
+          ${phoenix-surefire.argLine}
+          @{jacocoArgLine}</argLine>
+      </properties>
+    </profile>
+    <profile>
+      <id>build-with-jdk17</id>
+      <activation>
+        <jdk>[17,21)</jdk>
+      </activation>
+      <properties>
+        <argLine>${phoenix-surefire.jdk11.flags}
+          ${phoenix-surefire.jdk17.flags}
+          ${phoenix-surefire.jdk17.tuning.flags}
+          ${phoenix-surefire.argLine}
+          @{jacocoArgLine}</argLine>
+      </properties>
+    </profile>
+    <profile>
+      <id>build-with-jdk21</id>
+      <activation>
+        <jdk>[21,)</jdk>
+      </activation>
+      <properties>
+        <argLine>${phoenix-surefire.jdk11.flags}
+          ${phoenix-surefire.jdk17.flags}
+          ${phoenix-surefire.jdk21.flags}
+          ${phoenix-surefire.jdk17.tuning.flags}
+          ${phoenix-surefire.argLine}
+          @{jacocoArgLine}</argLine>
+      </properties>
     </profile>
   </profiles>
 

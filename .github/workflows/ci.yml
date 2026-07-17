@@ -9,6 +9,13 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     
+    strategy:
+      matrix:
+        # PRs: JDK 8 only for fast feedback
+        # Push: JDK 8 + 21 to verify baseline and --add-opens flags
+        java: ${{ github.event_name == 'pull_request' && fromJSON('[8]') || fromJSON('[8, 21]') }}
+      fail-fast: false
+
     # Increase timeout for long-running test suites
     #timeout-minutes: 60
 
@@ -18,10 +25,10 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Set up JDK 8
+    - name: Set up JDK ${{ matrix.java }}
       uses: actions/setup-java@v4
       with:
-        java-version: '8'
+        java-version: ${{ matrix.java }}
         distribution: 'temurin'
         cache: 'maven'
 
@@ -56,7 +63,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-results
+        name: test-results-jdk${{ matrix.java }}
         path: |
           **/target/surefire-reports/*.xml
           **/target/surefire-reports/*.txt
@@ -68,7 +75,7 @@ jobs:
       if: failure()
       uses: actions/upload-artifact@v4
       with:
-        name: test-logs
+        name: test-logs-jdk${{ matrix.java }}
         path: |
           **/target/surefire-reports/*.txt
           **/target/failsafe-reports/*.txt
@@ -82,7 +89,7 @@ jobs:
         NODE_OPTIONS: '--max-old-space-size=12288'
       with:
         report_paths: '**/target/*-reports/TEST-*.xml'
-        check_name: Test Results
+        check_name: Test Results (JDK ${{ matrix.java }})
         fail_on_failure: true
         require_tests: true
 
@@ -90,7 +97,7 @@ jobs:
       if: success()
       uses: actions/upload-artifact@v4
       with:
-        name: build-artifacts
+        name: build-artifacts-jdk${{ matrix.java }}
         path: |
           phoenix-ddb-assembly/target/*.tar.gz
         retention-days: 5
