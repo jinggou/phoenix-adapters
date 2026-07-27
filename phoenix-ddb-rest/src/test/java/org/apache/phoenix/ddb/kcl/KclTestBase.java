@@ -116,13 +116,14 @@ public abstract class KclTestBase {
         jdbcUrl = PhoenixRuntime.JDBC_PROTOCOL + PhoenixRuntime.JDBC_PROTOCOL_SEPARATOR + zkQuorum;
         DriverManager.registerDriver(new PhoenixTestDriver());
 
-        restServer = new RESTServer(utility.getConfiguration());
-        restServer.run();
-
-        // Probe Phoenix is queryable now that the REST server has bootstrapped it; absorbs
-        // the SYSTEM.CATALOG initialization race the first REST request would otherwise hit
+        // Probe Phoenix is queryable before starting REST server; absorbs
+        // the SYSTEM.CATALOG initialization race that validateConnection() would otherwise hit
         // on a slow CI worker.
         TestUtils.awaitPhoenixReady(jdbcUrl);
+
+        restServer = new RESTServer(utility.getConfiguration());
+        restServer.run();
+        
         restEndpoint = "http://" + restServer.getServerAddress();
         LOGGER.info("KclTestBase: REST server up at {}, DDB at {}",
                 restEndpoint, LocalDynamoDbTestBase.localDynamoDb().getEndpoint());
