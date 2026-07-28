@@ -60,7 +60,7 @@ public class ConnectionConfigIT {
         utility = new HBaseTestingUtility(conf);
         setUpConfigForMiniCluster(conf);
         utility.startMiniCluster();
-        String zkQuorum = "127.0.0.1:" + utility.getZkCluster().getClientPort();
+        String zkQuorum = "localhost:" + utility.getZkCluster().getClientPort();
         url = PhoenixRuntime.JDBC_PROTOCOL + PhoenixRuntime.JDBC_PROTOCOL_SEPARATOR + zkQuorum;
 
         restServer = new RESTServer(utility.getConfiguration());
