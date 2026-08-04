@@ -62,6 +62,7 @@ public class ConnectionConfigIT {
         utility.startMiniCluster();
         String zkQuorum = "127.0.0.1:" + utility.getZkCluster().getClientPort();
         url = PhoenixRuntime.JDBC_PROTOCOL + PhoenixRuntime.JDBC_PROTOCOL_SEPARATOR + zkQuorum;
+        TestUtils.awaitPhoenixReady(url);
 
         restServer = new RESTServer(utility.getConfiguration());
         restServer.run();
