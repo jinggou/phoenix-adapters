@@ -156,6 +156,57 @@
     </pluginManagement>
   </build>
   <profiles>
+    <!--
+      Apache RAT (Release Audit Tool) license-header check.
+      Bound to the package phase in this release profile, matching Apache Phoenix.
+      Run explicitly with: mvn -P release apache-rat:check
+      or as part of a release build: mvn -P release package
+    -->
+    <profile>
+      <id>release</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.rat</groupId>
+            <artifactId>apache-rat-plugin</artifactId>
+            <configuration>
+              <excludes>
+                <!-- ASF / VCS / IDE / tooling metadata -->
+                <exclude>.asf.yaml</exclude>
+                <exclude>.gitignore</exclude>
+                <exclude>.dockerignore</exclude>
+                <exclude>.java-version</exclude>
+                <exclude>.github/**</exclude>
+                <exclude>.vscode/**</exclude>
+                <exclude>.cursor/**</exclude>
+                <exclude>.mvn/**</exclude>
+                <exclude>dev-support/code-formatter/idea_formatter.xml</exclude>
+                <!-- Documentation, data and images (no header possible/needed) -->
+                <exclude>**/*.md</exclude>
+                <exclude>**/*.properties</exclude>
+                <exclude>src/images/**</exclude>
+                <!-- Config data files without headers -->
+                <exclude>conf/**</exclude>
+                <exclude>docker/conf/**</exclude>
+                <!-- Generated / build / runtime output -->
+                <exclude>**/target/**</exclude>
+                <exclude>**/logs/**</exclude>
+                <exclude>**/dependency-reduced-pom.xml</exclude>
+              </excludes>
+            </configuration>
+            <executions>
+              <execution>
+                <id>rat-check</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
     <profile>
       <id>coverage</id>
       <build>
